@@ -16,13 +16,12 @@
     printf("%s%s%s %s\n", color, src, NORMAL_PREFIX, txt); \
 }
 
-#define PML4_ADDR 0x0000000000001000
-#define PDP_ADDR  0x0000000000002000
-#define PD_ADDR   0x0000000000003000
-#define PT_ADDR   0x0000000000004000
-#define GDT_ADDR  0x0000000000008000
-#define GDT_ENTRIES 3
-#define GUEST_START_ADDR    0x0000000000009000
+#define PML4_ADDR 0x1FF000
+#define PDP_ADDR  0x1FE000
+#define PD_ADDR   0x1FD000
+#define PT_ADDR   0x1F9000
+#define GUEST_START_ADDR    0x000000
+#define STACK_STAT_ADDR     0x1F9000
 
 // PDE bitovi
 #define PDE64_PRESENT (1ULL << 0)
@@ -216,17 +215,16 @@ int setup_long_mode(struct vm* v, struct kvm_sregs* sregs) {
 	pml4[0] = PDE64_PRESENT | PDE64_RW | PDE64_USER | pdpt_addr;
 	pdpt[0] = PDE64_PRESENT | PDE64_RW | PDE64_USER | pd_addr;
 
-    if (v->page_size == (1UL<<21)) {
+    if (v->page_size == 0x200000) {
         // page size is 2 MB
+        // pd[0] = PDE64_PRESENT | PDE64_RW | PDE64_USER | PDE64_PS;
         uint8_t n_pages = v->mem_size >> 21;
         for (size_t ix = 0; ix < n_pages; ++ix) {
-            pd[ix] = (ix*v->page_size) | PDE64_PRESENT | PDE64_RW | PDE64_USER | PDE64_PS;
+            uint64_t page = (ix << 21);
+            pd[ix] = page | PDE64_PRESENT | PDE64_RW | PDE64_USER | PDE64_PS;
         }
-    } else if (v->page_size == (1UL<<12)) {
+    } else if (v->page_size == 0x1000) {
         // page size is 4 KB
-        uint64_t *pt = (void *)(v->mem_start + PT_ADDR);
-        pt[0] = GUEST_START_ADDR | PDE64_PRESENT | PDE64_RW | PDE64_USER;
-
         uint8_t n_pde = v->mem_size >> 21;
         for (uint64_t ix = 0; ix < n_pde; ++ix) {
             const uint16_t n_pages = 512;
@@ -236,16 +234,12 @@ int setup_long_mode(struct vm* v, struct kvm_sregs* sregs) {
 
             pd[ix] = pt_addr | PDE64_PRESENT | PDE64_RW | PDE64_USER;
             for (uint64_t jx = 0; jx < n_pages; ++jx) {
-                if (jx==0 && ix==0) continue;
                 uint64_t page = (ix<<21) | (jx<<12);
                 pt[jx] = page | PDE64_PRESENT | PDE64_RW | PDE64_USER;
             }
 
         }
-
-    } else {
-        return 0x21;
-    }
+    } else return 0x21;
 
     sregs->cr3  = pml4_addr; 
 	sregs->cr4  = CR4_PAE; // "Physical Address Extension" mora biti 1 za long mode.
@@ -255,7 +249,6 @@ int setup_long_mode(struct vm* v, struct kvm_sregs* sregs) {
     setup_segments_64(sregs);
 
     if (ioctl(v->vcpu_fd, KVM_SET_SREGS, sregs) != 0) {
-		perror("sreg set");
         return 0x22;
     }
 
@@ -299,7 +292,7 @@ int set_context(struct vm* v) {
     memset(&regs, 0, sizeof(regs));
 
     regs.rip = GUEST_START_ADDR; 
-	regs.rsp = v->mem_size; // SP raste nadole
+	regs.rsp = STACK_STAT_ADDR; // SP raste nadole
     regs.rflags = 0x2;
 
 	if (ioctl(v->vcpu_fd, KVM_SET_REGS, &regs) < 0) {
@@ -309,42 +302,60 @@ int set_context(struct vm* v) {
 }
 
 int run(struct vm* v) {
-    uint8_t stop = 0;
-    static const N = 100;
-    char buf[N];
-    int cur=0;
-
+    struct kvm_regs regs;
+    int stop = 0;
+    int msg_recv = 0;
+    int status = 0;
+    static const int N = 100;
+    char buf[N + 1];
+    int cur = 0;
+    
 	while(stop == 0) {
 		int ret = ioctl(v->vcpu_fd, KVM_RUN, 0);
-		if (ret != 0)
-			return 0x50;
+		if (ret != 0) {
+            status = 0x50;
+            break;
+        }
 
 		switch (v->run->exit_reason) {
 			case KVM_EXIT_IO:
 				if (v->run->io.direction == KVM_EXIT_IO_OUT && v->run->io.port == 0xE9) {
 					char *p = (char *)v->run;
-					char c  =*(p + v->run->io.data_offset);
-                    if (c=='\n' || cur==N) {
+                    char  c = *(p + v->run->io.data_offset);
+                    if (cur < N && c != '\n') 
+                        buf[cur++] = c;
+                    if (c == '\n' || cur == N) {
                         buf[cur] = '\0';
                         LOG("[VM]", buf, NORMAL_PREFIX);
-                        cur=0;
-                    } else {
-                        buf[cur++] = c;
+                        cur = 0;
                     }
 				}
+                msg_recv = 1;
 				continue;
 			case KVM_EXIT_HLT:
-				return 0x51;
+                status = 0; stop = 1; break;
 			case KVM_EXIT_SHUTDOWN:
-                struct kvm_regs regs;
                 ioctl(v->vcpu_fd, KVM_GET_REGS, &regs);
                 printf("RIP=0x%.16llx RSP=0x%.16llx RAX=0x%.16llx\n",
                     regs.rip, regs.rsp, regs.rax);
-				return 0x52;
+                status = 0x51; stop = 1; break;
 			default:
-				return 0x53;
+                status = 0x52; stop = 1; break;
     	}
   	}
+
+    // empty the buf before exit
+    if (cur > 0) {
+        buf[cur] = '\0';
+        LOG("[VM]", buf, NORMAL_PREFIX);
+        fflush(stdout); fflush(stderr);
+    }
+
+    if (!msg_recv && !status) {
+        status = 0x53;
+    }
+
+    return status;
 }
 
 int main(int argc, char* argv[]) {
@@ -423,10 +434,11 @@ int main(int argc, char* argv[]) {
 
     status = run(&v);
     switch(status) {
+        case 0x00: LOG("[HOST]", "Graceful exit - HLT reached.", GREEN_PREFIX); break;
         case 0x50: LOG("[HOST]", "KVM_RUN", RED_PREFIX); break;
-        case 0x51: LOG("[HOST]", "Graceful exit - HLT reached.", GREEN_PREFIX); break;
-        case 0x52: LOG("[HOST]", "Hard exit - forcefull shutdown.", RED_PREFIX); break;
-        case 0x53: LOG("[HOST]", "Unexpected exit cause.", RED_PREFIX); break;
+        case 0x51: LOG("[HOST]", "Hard exit - forcefull shutdown.", RED_PREFIX); break;
+        case 0x52: LOG("[HOST]", "Unexpected exit cause.", RED_PREFIX); break;
+        case 0x53: LOG("[HOST]", "Received no message.", RED_PREFIX); break;
         default:   LOG("[HOST]", "Unexpected error.", RED_PREFIX); break;
     }
 
