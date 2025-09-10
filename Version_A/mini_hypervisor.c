@@ -21,7 +21,7 @@
 #define PD_ADDR   0x1FD000
 #define PT_ADDR   0x1F9000
 #define GUEST_START_ADDR    0x000000
-#define STACK_STAT_ADDR     0x1F9000
+#define STACK_START_ADDR     0x1F9000
 
 // PDE bitovi
 #define PDE64_PRESENT (1ULL << 0)
@@ -292,7 +292,7 @@ int set_context(struct vm* v) {
     memset(&regs, 0, sizeof(regs));
 
     regs.rip = GUEST_START_ADDR; 
-	regs.rsp = STACK_STAT_ADDR; // SP raste nadole
+	regs.rsp = STACK_START_ADDR; // SP raste nadole
     regs.rflags = 0x2;
 
 	if (ioctl(v->vcpu_fd, KVM_SET_REGS, &regs) < 0) {
