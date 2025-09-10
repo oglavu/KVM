@@ -5,6 +5,7 @@
 #include <linux/kvm.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
+#include <sys/wait.h>
 #include <fcntl.h>
 #include <unistd.h>
 
@@ -37,22 +38,25 @@
 #define EFER_LME (1ULL << 8)
 #define EFER_LMA (1ULL << 10)
 
+#define MAX_VM 10
+
 typedef struct {
     size_t memory_sz, page_sz;
-    char guest_path[50];
+    uint8_t n_guests;
+    char guest_path[MAX_VM][50];
 } args_t;
 
 int read_args(int argc, char* argv[], args_t* myArgs) {
     /* read args
-       ./mini_hypervisor --memory 4 --page 2 --guest guest.img
+       ./mini_hypervisor --memory 4 --page 2 --guest guest.img [guest2.img]
        error codes:
-       (1) invalid args number. Exactly 7 args required.
+       (1) invalid args number. At least 7 args required.
        (2) invalid format of the supplied options. Every option requires an argument.
        (3) trying to set the arg twice. Every arg should be set with shorter (-) or longer (--) format.
        (4) invalid arg value. Mem must be 2, 4, or 8, Page 2 or 4 and guest must be an exe file.
     */
 
-    if (argc != 7)
+    if (argc < 7)
         return 1;
 
     struct {
@@ -81,9 +85,19 @@ int read_args(int argc, char* argv[], args_t* myArgs) {
             is_set.pg = 1;
         } else if (strcmp(argv[i], "-g") == 0 || strcmp(argv[i], "--guest") == 0) {
             if (is_set.guest) return 3;
-            strcpy(myArgs->guest_path, argv[i+1]);
-            if (access(argv[i+1], X_OK) != 0) return 4;
+            myArgs->n_guests = 0;
+            for (int j = 0; j < MAX_VM; ++j) {
+
+
+                if (i+j+1 >= argc || argv[i+j+1][0] == '-') break;
+                if (access(argv[i+j+1], X_OK) != 0) return 4;
+                
+                myArgs->n_guests++;
+                strcpy(myArgs->guest_path[j], argv[i+j+1]);
+            }
             is_set.guest = 1;
+            i += myArgs->n_guests-1;
+            
         } 
     }
     return 0;
@@ -301,7 +315,9 @@ int set_context(struct vm* v) {
     return 0;
 }
 
-int run(struct vm* v) {
+int run(struct vm* v, uint8_t p_ix) {
+    char src[20];
+    sprintf(src, "[GUEST-%d]", p_ix);
     struct kvm_regs regs;
     int stop = 0;
     int msg_recv = 0;
@@ -326,7 +342,7 @@ int run(struct vm* v) {
                         buf[cur++] = c;
                     if (c == '\n' || cur == N) {
                         buf[cur] = '\0';
-                        LOG("[VM]", buf, NORMAL_PREFIX);
+                        LOG(src, buf, NORMAL_PREFIX);
                         cur = 0;
                     }
 				}
@@ -347,7 +363,7 @@ int run(struct vm* v) {
     // empty the buf before exit
     if (cur > 0) {
         buf[cur] = '\0';
-        LOG("[VM]", buf, NORMAL_PREFIX);
+        LOG(src, buf, NORMAL_PREFIX);
         fflush(stdout); fflush(stderr);
     }
 
@@ -358,37 +374,25 @@ int run(struct vm* v) {
     return status;
 }
 
-int main(int argc, char* argv[]) {
-
-    // read args
-    args_t myArgs = {0};
-    int status = read_args(argc, argv, &myArgs);
-    switch (status) {
-        case 0: LOG("[HOST]", "Args read successfully.", GREEN_PREFIX); break;
-        case 1: LOG("[HOST]", "Invalid arg format. Try:\nexe (--memory|-m) <m> (--page|-p) <p> (--guest|-g) <g>\nwhere <m> is either 2, 4 or 8 and <p> either 2 or 4, and <g> an executable file", RED_PREFIX); break;
-        case 2: LOG("[HOST]", "Invalid number of args. Try:\nexe (--memory|-m) <m> (--page|-p) <p> (--guest|-g) <g>\nwhere <m> is either 2, 4 or 8 and <p> either 2 or 4, and <g> an executable file", RED_PREFIX); break;
-        case 3: LOG("[HOST]", " Arg set twice", RED_PREFIX); break;
-        case 4: LOG("[HOST]", "Invalid arg value.", RED_PREFIX); break;
-        default:LOG("[HOST]", "Unexpected read args status.", RED_PREFIX); break;
-    };
-
-    if (status != 0) 
-        return status;
+int child_main(args_t* myArgs, uint8_t p_ix) {
+    int status;
+    char src[20];
+    sprintf(src, "[VM-%d]", p_ix);
 
     // init vm
     struct vm v;
-    status = vm_init(&v, myArgs.memory_sz, myArgs.page_sz);
+    status = vm_init(&v, myArgs->memory_sz, myArgs->page_sz);
     switch (status) {
-        case 0x00: LOG("[HOST]", "VM inited successfully.", GREEN_PREFIX); break;
-        case 0x10: LOG("[HOST]", "Couldn't open /dev/kvm.", RED_PREFIX); break;
-        case 0x11: LOG("[HOST]", "KVM API mismatch.", RED_PREFIX); break;
-        case 0x12: LOG("[HOST]", "KVM_CREATE_VM", RED_PREFIX); break;
-        case 0x13: LOG("[HOST]", "MMAP MEM", RED_PREFIX); break;
-        case 0x14: LOG("[HOST]", "KVM_SET_USER_MEMORY_REGION", RED_PREFIX); break;
-        case 0x15: LOG("[HOST]", "KVM_CREATE_VCPU", RED_PREFIX); break;
-        case 0x16: LOG("[HOST]", "KVM_GET_VCPU_MMAP_SIZE", RED_PREFIX); break;
-        case 0x17: LOG("[HOST]", "MMAP KVM_RUN", RED_PREFIX); break;
-        default:   LOG("[HSOT]", "Unexepected error.", RED_PREFIX); break;
+        case 0x00: LOG(src, "VM inited successfully.", GREEN_PREFIX); break;
+        case 0x10: LOG(src, "Couldn't open /dev/kvm.", RED_PREFIX); break;
+        case 0x11: LOG(src, "KVM API mismatch.", RED_PREFIX); break;
+        case 0x12: LOG(src, "KVM_CREATE_VM", RED_PREFIX); break;
+        case 0x13: LOG(src, "MMAP MEM", RED_PREFIX); break;
+        case 0x14: LOG(src, "KVM_SET_USER_MEMORY_REGION", RED_PREFIX); break;
+        case 0x15: LOG(src, "KVM_CREATE_VCPU", RED_PREFIX); break;
+        case 0x16: LOG(src, "KVM_GET_VCPU_MMAP_SIZE", RED_PREFIX); break;
+        case 0x17: LOG(src, "MMAP KVM_RUN", RED_PREFIX); break;
+        default:   LOG(src, "Unexepected error.", RED_PREFIX); break;
     }
 
     if (status != 0)
@@ -398,25 +402,25 @@ int main(int argc, char* argv[]) {
     struct kvm_sregs sregs;
     status = setup_long_mode(&v, &sregs);
     switch (status) {
-        case 0x00: LOG("[HOST]", "Long mode setup successfully.", GREEN_PREFIX); break;
-        case 0x20: LOG("[HOST]", "KVM_GET_SREGS", RED_PREFIX) break;
-        case 0x21: LOG("[HOST]", "Invalid mem_size", RED_PREFIX); break;
-        case 0x22: LOG("[HOST]", "KVM_SET_SREGS", RED_PREFIX); break;
-        default:   LOG("[HOST]", "Unexpected error.", RED_PREFIX); break;
+        case 0x00: LOG(src, "Long mode setup successfully.", GREEN_PREFIX); break;
+        case 0x20: LOG(src, "KVM_GET_SREGS", RED_PREFIX) break;
+        case 0x21: LOG(src, "Invalid mem_size", RED_PREFIX); break;
+        case 0x22: LOG(src, "KVM_SET_SREGS", RED_PREFIX); break;
+        default:   LOG(src, "Unexpected error.", RED_PREFIX); break;
     }
 
     if (status != 0)
         goto cleanup;
 
-    status = load_guest_image(&v, myArgs.guest_path);
+    status = load_guest_image(&v, myArgs->guest_path[p_ix]);
     switch (status) {
-        case 0x00: LOG("[HOST]", "Guest Image loaded successfully.", GREEN_PREFIX); break;
-        case 0x30: LOG("[HOST]", "Failed to open guest image.", RED_PREFIX); break;
-        case 0x31: LOG("[HOST]", "Failed to reach the EOF.", RED_PREFIX); break;
-        case 0x32: LOG("[HOST]", "Failed to get size of guest image.", RED_PREFIX); break;
-        case 0x33: LOG("[HOST]", "Guest image is too large.", RED_PREFIX); break;
-        case 0x34: LOG("[HOST]", "Failed to read guest image.", RED_PREFIX); break;
-        default:   LOG("[HOST]", "Unexpected error.", RED_PREFIX); break;
+        case 0x00: LOG(src, "Guest Image loaded successfully.", GREEN_PREFIX); break;
+        case 0x30: LOG(src, "Failed to open guest image.", RED_PREFIX); break;
+        case 0x31: LOG(src, "Failed to reach the EOF.", RED_PREFIX); break;
+        case 0x32: LOG(src, "Failed to get size of guest image.", RED_PREFIX); break;
+        case 0x33: LOG(src, "Guest image is too large.", RED_PREFIX); break;
+        case 0x34: LOG(src, "Failed to read guest image.", RED_PREFIX); break;
+        default:   LOG(src, "Unexpected error.", RED_PREFIX); break;
     }
 
     if (status != 0)
@@ -424,26 +428,77 @@ int main(int argc, char* argv[]) {
     
     status = set_context(&v);
     switch (status) {
-        case 0x00: LOG("[HOST]", "Regs set successfully.", GREEN_PREFIX); break;
-        case 0x40: LOG("[HOST]", "KVM_SET_REGS", RED_PREFIX); break;
-        default:   LOG("[HOST]", "Unexpected error.", RED_PREFIX); break;
+        case 0x00: LOG(src, "Regs set successfully.", GREEN_PREFIX); break;
+        case 0x40: LOG(src, "KVM_SET_REGS", RED_PREFIX); break;
+        default:   LOG(src, "Unexpected error.", RED_PREFIX); break;
     }
 
     if (status != 0)
         goto cleanup;
 
-    status = run(&v);
+    status = run(&v, p_ix);
     switch(status) {
-        case 0x00: LOG("[HOST]", "Graceful exit - HLT reached.", GREEN_PREFIX); break;
-        case 0x50: LOG("[HOST]", "KVM_RUN", RED_PREFIX); break;
-        case 0x51: LOG("[HOST]", "Hard exit - forcefull shutdown.", RED_PREFIX); break;
-        case 0x52: LOG("[HOST]", "Unexpected exit cause.", RED_PREFIX); break;
-        case 0x53: LOG("[HOST]", "Received no message.", RED_PREFIX); break;
-        default:   LOG("[HOST]", "Unexpected error.", RED_PREFIX); break;
+        case 0x00: LOG(src, "Graceful exit - HLT reached.", GREEN_PREFIX); break;
+        case 0x50: LOG(src, "KVM_RUN", RED_PREFIX); break;
+        case 0x51: LOG(src, "Hard exit - forcefull shutdown.", RED_PREFIX); break;
+        case 0x52: LOG(src, "Unexpected exit cause.", RED_PREFIX); break;
+        case 0x53: LOG(src, "Received no message.", RED_PREFIX); break;
+        default:   LOG(src, "Unexpected error.", RED_PREFIX); break;
     }
 
 cleanup:
     vm_destroy(&v);
+
+    return status;
+
+}
+
+int main(int argc, char* argv[]) {
+
+    // read args
+    char src[50];
+    args_t myArgs = {0};
+    int status = read_args(argc, argv, &myArgs);
+    switch (status) {
+        case 0: LOG("[HOST]", "Args read successfully.", GREEN_PREFIX); break;
+        case 1: LOG("[HOST]", "Invalid arg format. Try:\nexe (--memory|-m) <m> (--page|-p) <p> (--guest|-g) <g>\nwhere <m> is either 2, 4 or 8 and <p> either 2 or 4, and <g> an executable file", RED_PREFIX); break;
+        case 2: LOG("[HOST]", "Invalid number of args. Try:\nexe (--memory|-m) <m> (--page|-p) <p> (--guest|-g) <g>\nwhere <m> is either 2, 4 or 8 and <p> either 2 or 4, and <g> an executable file", RED_PREFIX); break;
+        case 3: LOG("[HOST]", "Arg set twice", RED_PREFIX); break;
+        case 4: LOG("[HOST]", "Invalid arg value.", RED_PREFIX); break;
+        default:LOG("[HOST]", "Unexpected read args status.", RED_PREFIX); break;
+    };
+
+    if (status != 0) 
+        return status;
+
+    for (uint8_t p_ix = 0; p_ix < myArgs.n_guests; ++p_ix) {
+        pid_t pid = fork();
+
+        if (pid < 0) {
+            // failed
+            sprintf(src, "[HOST-%d]", p_ix);
+            LOG(src, "Process not started", RED_PREFIX);
+            return -1;
+        } else if (pid == 0) {
+            // child process
+            sprintf(src, "[VM-%d]", p_ix);
+            LOG(src, "Starting process", GREEN_PREFIX);
+
+            return child_main(&myArgs, p_ix);
+        } else {
+            sprintf(src, "VM-%d started with PID %d", p_ix, pid);
+            LOG("[HOST]", src, GREEN_PREFIX);
+        }
+    }
+
+    int p_status;
+    for (int ix = 0; ix < myArgs.n_guests; ++ix) {
+        pid_t pid = wait(&p_status);
+        
+        sprintf(src, "VM-%d returned with status: %d", pid, p_status);
+        LOG("[HOST]", src, (p_status == 0 ? GREEN_PREFIX : RED_PREFIX));
+        status |= p_status;
+    }
 
     return status;
 }
