@@ -4,6 +4,7 @@
 #include <string.h>
 #include <linux/kvm.h>
 #include <sys/ioctl.h>
+#include <sys/stat.h>
 #include <sys/mman.h>
 #include <sys/wait.h>
 #include <fcntl.h>
@@ -38,13 +39,21 @@
 #define EFER_LME (1ULL << 8)
 #define EFER_LMA (1ULL << 10)
 
-#define MAX_VM 10
+#define MAX_VM 8
+#define MAX_FILE 8
+#define FIO_PORT 0x278
+#define CIO_PORT 0xE9
 
 typedef struct {
     size_t memory_sz, page_sz;
-    uint8_t n_guests;
+    uint8_t n_guests, n_files;
     char guest_path[MAX_VM][50];
+    char file_path[MAX_FILE][50];
 } args_t;
+
+const char* drive = "drive";
+const char* shared_partition = "drive/shared/";
+const char* per_proces_partition = "drive/proc_/";
 
 int read_args(int argc, char* argv[], args_t* myArgs) {
     /* read args
@@ -60,7 +69,7 @@ int read_args(int argc, char* argv[], args_t* myArgs) {
         return 1;
 
     struct {
-        uint8_t mem, pg, guest;
+        uint8_t mem, pg, guest, file;
     } is_set = {0};
     
     for (int i=1; i<argc; i += 2) {
@@ -98,11 +107,22 @@ int read_args(int argc, char* argv[], args_t* myArgs) {
             is_set.guest = 1;
             i += myArgs->n_guests-1;
             
-        } 
+        } else if (strcmp(argv[i], "-f") == 0 || strcmp(argv[i], "--file") == 0) {
+            if (is_set.file) return 3;
+            myArgs->n_files = 0;
+            for (int j = 0; j < MAX_FILE; ++j) {
+
+                if (i+j+1 >= argc || argv[i+j+1][0] == '-') break;
+                
+                myArgs->n_files++;
+                strcpy(myArgs->file_path[j], argv[i+j+1]);
+            }
+            is_set.file = 1;
+            i += myArgs->n_files-1;
+        }
     }
     return 0;
 }
-
 
 struct vm {
     int kvm_fd,
@@ -315,6 +335,32 @@ int set_context(struct vm* v) {
     return 0;
 }
 
+static int system_call_routine(struct vm* v) {
+    
+    struct kvm_regs regs;
+    if (ioctl(v->vcpu_fd, KVM_GET_REGS, &regs) < 0) {
+        return 0x60;
+    }
+
+    long op_code = regs.rax;
+    long arg1r = regs.rbx,
+         arg2r = regs.rcx;
+    char *filename, *mode, byte;
+    int fd;
+    switch(op_code) {
+        case 0:
+            filename = (char*)(arg1r+v->mem_start);
+            mode = (char*)(arg1r+v->mem_start);
+        case 1:
+        case 2:
+        case 3:
+        default:
+    }
+
+    return 0;
+}
+
+
 int run(struct vm* v, uint8_t p_ix) {
     char src[20];
     sprintf(src, "[GUEST-%d]", p_ix);
@@ -335,7 +381,9 @@ int run(struct vm* v, uint8_t p_ix) {
 
 		switch (v->run->exit_reason) {
 			case KVM_EXIT_IO:
-				if (v->run->io.direction == KVM_EXIT_IO_OUT && v->run->io.port == 0xE9) {
+                msg_recv = 1;
+				if (v->run->io.direction == KVM_EXIT_IO_OUT && 
+                        v->run->io.port == CIO_PORT) {
 					char *p = (char *)v->run;
                     char  c = *(p + v->run->io.data_offset);
                     if (cur < N && c != '\n') 
@@ -345,8 +393,11 @@ int run(struct vm* v, uint8_t p_ix) {
                         LOG(src, buf, NORMAL_PREFIX);
                         cur = 0;
                     }
+				} else if (v->run->io.direction == KVM_EXIT_IO_OUT && 
+                        v->run->io.port == FIO_PORT) {
+                    system_call_routine(v);
 				}
-                msg_recv = 1;
+                
 				continue;
 			case KVM_EXIT_HLT:
                 status = 0; stop = 1; break;
@@ -397,6 +448,20 @@ int child_main(args_t* myArgs, uint8_t p_ix) {
 
     if (status != 0)
         goto cleanup;
+    
+    // create folders
+    //execlp("rm", "rm", "-rf", drive, (char*)NULL);
+    mkdir(drive, 0777);
+    mkdir(shared_partition, 0777);
+    for (int i=0; i<myArgs->n_guests; ++i) {
+        char proc[sizeof(per_proces_partition)]; strcpy(proc, per_proces_partition); proc[10]=(char)('0'+i);
+        mkdir(proc, 0777);
+    }
+    for (int i=0; i<myArgs->n_files; ++i) {
+        char file[100]; strcpy(file, shared_partition); strcat(file, myArgs->file_path[i]);
+        if (access(myArgs->file_path[i], R_OK)) 
+            execlp("cp", "cp", myArgs->file_path[i], file, (char*)NULL);
+    }
 
     // setup long mode & paging
     struct kvm_sregs sregs;
@@ -461,8 +526,8 @@ int main(int argc, char* argv[]) {
     int status = read_args(argc, argv, &myArgs);
     switch (status) {
         case 0: LOG("[HOST]", "Args read successfully.", GREEN_PREFIX); break;
-        case 1: LOG("[HOST]", "Invalid arg format. Try:\nexe (--memory|-m) <m> (--page|-p) <p> (--guest|-g) <g>\nwhere <m> is either 2, 4 or 8 and <p> either 2 or 4, and <g> an executable file", RED_PREFIX); break;
-        case 2: LOG("[HOST]", "Invalid number of args. Try:\nexe (--memory|-m) <m> (--page|-p) <p> (--guest|-g) <g>\nwhere <m> is either 2, 4 or 8 and <p> either 2 or 4, and <g> an executable file", RED_PREFIX); break;
+        case 1: LOG("[HOST]", "Invalid arg format. Try:\nexe (--memory|-m) <m> (--page|-p) <p> (--guest|-g) <g> [--file|-f <f>]\nwhere <m> is either 2, 4 or 8 and <p> either 2 or 4, and <g> an executable file", RED_PREFIX); break;
+        case 2: LOG("[HOST]", "Invalid number of args. Try:\nexe (--memory|-m) <m> (--page|-p) <p> (--guest|-g) <g> [--file|-f <f>]\nwhere <m> is either 2, 4 or 8 and <p> either 2 or 4, and <g> an executable file", RED_PREFIX); break;
         case 3: LOG("[HOST]", "Arg set twice", RED_PREFIX); break;
         case 4: LOG("[HOST]", "Invalid arg value.", RED_PREFIX); break;
         default:LOG("[HOST]", "Unexpected read args status.", RED_PREFIX); break;
