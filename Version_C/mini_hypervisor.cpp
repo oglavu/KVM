@@ -7,8 +7,10 @@
 #include <sys/stat.h>
 #include <sys/mman.h>
 #include <sys/wait.h>
+#include <sys/sendfile.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <string>
 
 #define GREEN_PREFIX "\x1b[32m"
 #define RED_PREFIX "\x1b[31m"
@@ -139,8 +141,8 @@ int vm_init(struct vm *v, size_t mem_size, size_t page_size) {
 
 	memset(v, 0, sizeof(*v));
 	v->kvm_fd = v->vm_fd = v->vcpu_fd = -1;
-	v->mem_start = MAP_FAILED;
-	v->run = MAP_FAILED;
+	v->mem_start = (uint8_t*)MAP_FAILED;
+	v->run = (struct kvm_run*)MAP_FAILED;
 	v->run_mmap_size = 0;
 	v->mem_size = mem_size;
     v->page_size = page_size;
@@ -173,7 +175,7 @@ int vm_init(struct vm *v, size_t mem_size, size_t page_size) {
 	v->run_mmap_size = ioctl(v->kvm_fd, KVM_GET_VCPU_MMAP_SIZE, 0);
     if (v->run_mmap_size <= 0) return 0x16;
 
-	v->run = mmap(NULL, v->run_mmap_size, PROT_READ | PROT_WRITE,
+	v->run = (struct kvm_run*)mmap(NULL, v->run_mmap_size, PROT_READ | PROT_WRITE,
 			     MAP_SHARED, v->vcpu_fd, 0);
 	if (v->run == MAP_FAILED) return 0x17;
 
@@ -183,12 +185,12 @@ int vm_init(struct vm *v, size_t mem_size, size_t page_size) {
 void vm_destroy(struct vm* v) {
     if (v->run && v->run != MAP_FAILED) {
 		munmap(v->run, (size_t)v->run_mmap_size);
-		v->run = MAP_FAILED;
+		v->run = (struct kvm_run*)MAP_FAILED;
 	}
 
 	if(v->mem_start && v->mem_start != MAP_FAILED) {
 		munmap(v->mem_start, v->mem_size);
-		v->mem_start = MAP_FAILED;
+		v->mem_start = (uint8_t*)MAP_FAILED;
 	}
 
 	if (v->vcpu_fd >= 0) {
@@ -213,15 +215,16 @@ static void setup_segments_64(struct kvm_sregs* sregs) {
 	struct kvm_segment code = {
 		.base = 0,
 		.limit = ~0U,
+        .selector = 0x8,
+        .type = 11, // Code: execute, read, accessed
 		.present = 1, // Prisutan ili učitan u memoriji
-		.type = 11, // Code: execute, read, accessed
 		.dpl = 0, // Descriptor Privilage Level: 0 (0, 1, 2, 3)
 		.db = 0, // Default size - ima vrednost 0 u long modu
 		.s = 1, // Code/data tip segmenta
 		.l = 1, // Long mode - 1
 		.g = 1, // 4KB granularnost
         .unusable = 0,
-        .selector = 0x8,
+        
 	};
 	struct kvm_segment data = code;
 	data.type = 3; // Data: read, write, accessed
@@ -238,13 +241,13 @@ int setup_long_mode(struct vm* v, struct kvm_sregs* sregs) {
 		return 0x20;
 
 	uint64_t pml4_addr = PML4_ADDR;
-	uint64_t *pml4 = (void *)(v->mem_start + pml4_addr);
+	uint64_t *pml4 = (uint64_t *)(v->mem_start + pml4_addr);
 
 	uint64_t pdpt_addr = PDP_ADDR;
-	uint64_t *pdpt = (void *)(v->mem_start + pdpt_addr);
+	uint64_t *pdpt = (uint64_t *)(v->mem_start + pdpt_addr);
 
 	uint64_t pd_addr = PD_ADDR;
-	uint64_t *pd = (void *)(v->mem_start + pd_addr);
+	uint64_t *pd = (uint64_t *)(v->mem_start + pd_addr);
 
 	pml4[0] = PDE64_PRESENT | PDE64_RW | PDE64_USER | pdpt_addr;
 	pdpt[0] = PDE64_PRESENT | PDE64_RW | PDE64_USER | pd_addr;
@@ -264,7 +267,7 @@ int setup_long_mode(struct vm* v, struct kvm_sregs* sregs) {
             const uint16_t n_pages = 512;
 
             uint64_t pt_addr = PT_ADDR + (ix * 0x1000);
-            uint64_t *pt = (void *)(v->mem_start + pt_addr);
+            uint64_t *pt = (uint64_t *)(v->mem_start + pt_addr);
 
             pd[ix] = pt_addr | PDE64_PRESENT | PDE64_RW | PDE64_USER;
             for (uint64_t jx = 0; jx < n_pages; ++jx) {
@@ -321,6 +324,45 @@ int load_guest_image(struct vm* v, const char* path) {
 	return 0;
 }
 
+static int cp_file(const char* src, const char* dst) {
+    int in_fd  = open(src, O_RDONLY);
+    int out_fd = open(dst, O_WRONLY | O_CREAT | O_TRUNC, 0666);
+    if (in_fd < 0 || out_fd < 0) return -1;
+
+    off_t offset = 0;
+    struct stat st;
+    fstat(in_fd, &st);
+    sendfile(out_fd, in_fd, &offset, st.st_size);
+
+    close(in_fd);
+    close(out_fd);
+    return 0;
+}
+
+static int partition_drive(args_t* myArgs) {
+    
+    char src[100];
+    // create folders
+    mkdir(drive, 0777);
+    mkdir(shared_partition, 0777);
+    for (int i=0; i<myArgs->n_guests; ++i) {
+        strcpy(src, per_proces_partition); src[10]=(char)('0'+i);
+        mkdir(src, 0777);
+    }
+
+    // create/copy files
+    for (int i=0; i<myArgs->n_files; ++i) {
+        strcpy(src, shared_partition); strcat(src, myArgs->file_path[i]);
+
+        if (0 == access(myArgs->file_path[i], R_OK)) {
+            cp_file(myArgs->file_path[i], src);
+        } else {
+            open(src, O_CREAT);
+        }
+    }
+    return 0;
+}
+
 int set_context(struct vm* v) {
     struct kvm_regs regs;
     memset(&regs, 0, sizeof(regs));
@@ -335,11 +377,41 @@ int set_context(struct vm* v) {
     return 0;
 }
 
-static int system_call_routine(struct vm* v) {
+static int vm_id;
+
+typedef FILE* ftable_e;
+
+uint16_t free_entry = 3;
+ftable_e ftable[MAX_FILE];
+
+static int fopen_routine(const char* filename, const char* mode) {
+    std::string shared_filename(shared_partition);
+    shared_filename.append(filename);
+    
+    std::string proc_filename(per_proces_partition);
+    proc_filename[proc_filename.size()-3] = (char)('0'+vm_id);
+    proc_filename.append(filename); 
+    if (access(shared_filename.c_str(), F_OK) == 0 ) {
+        filename = shared_filename.c_str();
+    } else {
+        filename = proc_filename.c_str();
+    }
+
+    int ret = 0;
+    try {
+        ftable[free_entry] = fopen(filename, mode);
+        ret = free_entry++;
+    } catch (std::exception) { }
+
+    return ret;
+}
+
+static void system_call_routine(struct vm* v) {
     
     struct kvm_regs regs;
     if (ioctl(v->vcpu_fd, KVM_GET_REGS, &regs) < 0) {
-        return 0x60;
+        LOG("[HOST]", "Host couldn't get VM regs in syscall.", RED_PREFIX);
+        return;
     }
 
     long op_code = regs.rax;
@@ -350,14 +422,19 @@ static int system_call_routine(struct vm* v) {
     switch(op_code) {
         case 0:
             filename = (char*)(arg1r+v->mem_start);
-            mode = (char*)(arg1r+v->mem_start);
+            mode = (char*)(arg2r+v->mem_start);
+            regs.rax = (uint64_t)fopen_routine(filename, mode);
+            break;
         case 1:
         case 2:
         case 3:
-        default:
+        default: break;
     }
 
-    return 0;
+    if (ioctl(v->vcpu_fd, KVM_SET_REGS, &regs) < 0) {
+        LOG("[HOST]", "Host couldn't set VM regs in syscall.", RED_PREFIX);
+        return;
+    }
 }
 
 
@@ -449,20 +526,6 @@ int child_main(args_t* myArgs, uint8_t p_ix) {
     if (status != 0)
         goto cleanup;
     
-    // create folders
-    //execlp("rm", "rm", "-rf", drive, (char*)NULL);
-    mkdir(drive, 0777);
-    mkdir(shared_partition, 0777);
-    for (int i=0; i<myArgs->n_guests; ++i) {
-        char proc[sizeof(per_proces_partition)]; strcpy(proc, per_proces_partition); proc[10]=(char)('0'+i);
-        mkdir(proc, 0777);
-    }
-    for (int i=0; i<myArgs->n_files; ++i) {
-        char file[100]; strcpy(file, shared_partition); strcat(file, myArgs->file_path[i]);
-        if (access(myArgs->file_path[i], R_OK)) 
-            execlp("cp", "cp", myArgs->file_path[i], file, (char*)NULL);
-    }
-
     // setup long mode & paging
     struct kvm_sregs sregs;
     status = setup_long_mode(&v, &sregs);
@@ -536,6 +599,15 @@ int main(int argc, char* argv[]) {
     if (status != 0) 
         return status;
 
+    status = partition_drive(&myArgs);
+    switch(status) {
+        case 0: LOG("[HOST]", "Disk partitioned successfully.", GREEN_PREFIX); break;
+        default:LOG("[HOST]", "Disk partitioned failed", RED_PREFIX) break;
+    }
+
+    if (status != 0)
+        return status;
+
     for (uint8_t p_ix = 0; p_ix < myArgs.n_guests; ++p_ix) {
         pid_t pid = fork();
 
@@ -548,6 +620,7 @@ int main(int argc, char* argv[]) {
             // child process
             sprintf(src, "[VM-%d]", p_ix);
             LOG(src, "Starting process", GREEN_PREFIX);
+            vm_id = p_ix;
 
             return child_main(&myArgs, p_ix);
         } else {
