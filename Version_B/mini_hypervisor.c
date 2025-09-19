@@ -40,6 +40,8 @@
 
 #define MAX_VM 10
 
+#define CIO_PORT 0xE9
+
 typedef struct {
     size_t memory_sz, page_sz;
     uint8_t n_guests;
@@ -335,19 +337,23 @@ int run(struct vm* v, uint8_t p_ix) {
 
 		switch (v->run->exit_reason) {
 			case KVM_EXIT_IO:
-				if (v->run->io.direction == KVM_EXIT_IO_OUT && v->run->io.port == 0xE9) {
-					char *p = (char *)v->run;
-                    char  c = *(p + v->run->io.data_offset);
-                    if (cur < N && c != '\n') 
-                        buf[cur++] = c;
-                    if (c == '\n' || cur == N) {
-                        buf[cur] = '\0';
-                        LOG(src, buf, NORMAL_PREFIX);
-                        cur = 0;
-                    }
-				}
-                msg_recv = 1;
-				continue;
+            msg_recv = 1;
+            if (v->run->io.direction == KVM_EXIT_IO_IN && 
+                v->run->io.port == CIO_PORT) {
+                char *p = (char *)v->run;
+                *(p + v->run->io.data_offset) = getchar();
+            } else if (v->run->io.direction == KVM_EXIT_IO_OUT && 
+                    v->run->io.port == CIO_PORT) {
+                char *p = (char *)v->run;
+                char  c = *(p + v->run->io.data_offset);
+                if (cur < N && c != '\n') 
+                    buf[cur++] = c;
+                if (c == '\n' || cur == N) {
+                    buf[cur] = '\0';
+                    LOG(src, buf, NORMAL_PREFIX);
+                    cur = 0;
+                }
+            }
 			case KVM_EXIT_HLT:
                 status = 0; stop = 1; break;
 			case KVM_EXIT_SHUTDOWN:

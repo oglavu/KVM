@@ -37,6 +37,8 @@
 #define EFER_LME (1ULL << 8)
 #define EFER_LMA (1ULL << 10)
 
+#define CIO_PORT 0xE9
+
 typedef struct {
     size_t memory_sz, page_sz;
     char guest_path[50];
@@ -319,17 +321,22 @@ int run(struct vm* v) {
 
 		switch (v->run->exit_reason) {
 			case KVM_EXIT_IO:
-				if (v->run->io.direction == KVM_EXIT_IO_OUT && v->run->io.port == 0xE9) {
-					char *p = (char *)v->run;
+                if (v->run->io.direction == KVM_EXIT_IO_IN && 
+                    v->run->io.port == CIO_PORT) {
+                    char *p = (char *)v->run;
+                    *(p + v->run->io.data_offset) = getchar();
+                } else if (v->run->io.direction == KVM_EXIT_IO_OUT && 
+                        v->run->io.port == CIO_PORT) {
+                    char *p = (char *)v->run;
                     char  c = *(p + v->run->io.data_offset);
                     if (cur < N && c != '\n') 
                         buf[cur++] = c;
                     if (c == '\n' || cur == N) {
                         buf[cur] = '\0';
-                        LOG("[VM]", buf, NORMAL_PREFIX);
+                        LOG("[GUEST]", buf, NORMAL_PREFIX);
                         cur = 0;
                     }
-				}
+                }
                 msg_recv = 1;
 				continue;
 			case KVM_EXIT_HLT:

@@ -561,7 +561,11 @@ int run(struct vm* v, uint8_t p_ix) {
 		switch (v->run->exit_reason) {
 			case KVM_EXIT_IO:
                 msg_recv = 1;
-				if (v->run->io.direction == KVM_EXIT_IO_OUT && 
+                if (v->run->io.direction == KVM_EXIT_IO_IN && 
+                    v->run->io.port == CIO_PORT) {
+                    char *p = (char *)v->run;
+                    *(p + v->run->io.data_offset) = getchar();
+                } else if (v->run->io.direction == KVM_EXIT_IO_OUT && 
                         v->run->io.port == CIO_PORT) {
 					char *p = (char *)v->run;
                     char  c = *(p + v->run->io.data_offset);
@@ -572,7 +576,7 @@ int run(struct vm* v, uint8_t p_ix) {
                         LOG(src, buf, NORMAL_PREFIX);
                         cur = 0;
                     }
-				} else if (v->run->io.direction == KVM_EXIT_IO_OUT && 
+                } else if (v->run->io.direction == KVM_EXIT_IO_OUT && 
                         v->run->io.port == FIO_PORT) {
                     system_call_routine(v);
 				}

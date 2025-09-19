@@ -71,6 +71,11 @@ __attribute__((section(".start")))
 _start(void) {
 	const char *p;
 
+	char ch;
+	while((ch = getc()) != 'e') {
+		putc(ch);
+	}
+
 	for (p = "Hello, world!\n"; *p; ++p)
 		outb(0xE9, *p);
 
