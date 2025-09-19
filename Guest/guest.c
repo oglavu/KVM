@@ -2,6 +2,13 @@
 
 #define EOF (int)-1
 
+#define SYS_FOPEN 0
+#define SYS_FCLOSE 1
+#define SYS_FPUTC 2
+#define SYS_FGETC 3
+#define SYS_FTELL 4
+#define SYS_FSEEK 5
+
 static const int FIO_PORT = 0x278;
 static const int CIO_PORT = 0xE9;
 
@@ -35,19 +42,27 @@ static inline long syscall(long num, long arg1, long arg2) {
 }
 
 int fopen(const char *filename, const char *mode) {
-	return syscall(0, (long)filename, (long)mode);
+	return syscall(SYS_FOPEN, (long)filename, (long)mode);
 }
 
 int fputc(int b, int fd) {
-	return syscall(2, (long)b, (long)fd);
+	return syscall(SYS_FPUTC, (long)b, (long)fd);
 }
 
 int fgetc(int fd) {
-	return syscall(3, (long)fd, 0);
+	return syscall(SYS_FGETC, (long)fd, 0);
 }
 
 int fclose(int fd) {
-	return syscall(1, (long)fd, 0);
+	return syscall(SYS_FCLOSE, (long)fd, 0);
+}
+
+long ftell(int fd) {
+	return syscall(SYS_FTELL, (long)fd, 0);
+}
+
+int fseek(int fd, long offset) {
+	return syscall(SYS_FSEEK, (long)fd, offset);
 }
 
 void
@@ -60,8 +75,9 @@ _start(void) {
 		outb(0xE9, *p);
 
 	// reading from shared file
-	int fd = fopen("Makefile", "r");
+	int fd = fopen("Makefile", "a+");
 	char c;
+	fputc('x', fd);
 	while((c = fgetc(fd)) != EOF) {
 		putc(c);
 	}

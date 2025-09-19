@@ -47,6 +47,13 @@
 #define FIO_PORT 0x278
 #define CIO_PORT 0xE9
 
+#define SYS_FOPEN 0
+#define SYS_FCLOSE 1
+#define SYS_FPUTC 2
+#define SYS_FGETC 3
+#define SYS_FTELL 4
+#define SYS_FSEEK 5
+
 typedef struct {
     size_t memory_sz, page_sz;
     uint8_t n_guests, n_files;
@@ -462,6 +469,24 @@ static int fgetc_routine(int vfd) {
     return ret;
 }
 
+static long ftell_routine(int vfd) {
+    long ret = -1;
+    try {
+        ftable_e fd = ftable[vfd];
+        ret = ftell(fd.dsc);
+    } catch(std::exception) { }
+    return ret;
+}
+
+static int fseek_routine(int vfd, long offset) {
+    int ret = -1;
+    try {
+        ftable_e fd = ftable[vfd];
+        ret = fseek(fd.dsc, offset, SEEK_SET);
+    } catch(std::exception) { }
+    return ret;
+}
+
 static void system_call_routine(struct vm* v) {
     
     struct kvm_regs regs;
@@ -477,23 +502,31 @@ static void system_call_routine(struct vm* v) {
     int vfd, c;
     //printf("op_code: %ld\targ1r: %ld\targ2r: %ld\n", op_code, arg1r, arg2r);
     switch(op_code) {
-        case 0: // fopen
+        case SYS_FOPEN: // fopen
             filename = (char*)(arg1r+v->mem_start);
             mode = (char*)(arg2r+v->mem_start);
             regs.rax = (uint64_t)fopen_routine(filename, mode);
             break;
-        case 1: // fclose
+        case SYS_FCLOSE: // fclose
             vfd = (int)arg1r;
             regs.rax = (uint64_t)fclose_routine(vfd);
             break;
-        case 2: // fputc
+        case SYS_FPUTC: // fputc
             c = (int)arg1r;
             vfd = (int)arg2r;
             regs.rax = (uint64_t)fputc_routine(c, vfd);
             break;
-        case 3: // fgetc
+        case SYS_FGETC: // fgetc
             vfd = (int)arg1r;
             regs.rax = (uint64_t)fgetc_routine(vfd);
+            break;
+        case SYS_FTELL:
+            vfd = (int)arg1r;
+            regs.rax = (uint64_t)ftell_routine(vfd);
+            break;
+        case SYS_FSEEK:
+            vfd = (int)arg1r;
+            regs.rax = (uint64_t)fseek_routine(vfd, arg2r);
             break;
         default: 
             LOG("[VM]", "Unknown syscall.", RED_PREFIX);
