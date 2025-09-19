@@ -11,6 +11,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <string>
+#include <filesystem>
 
 #define GREEN_PREFIX "\x1b[32m"
 #define RED_PREFIX "\x1b[31m"
@@ -379,30 +380,85 @@ int set_context(struct vm* v) {
 
 static int vm_id;
 
-typedef FILE* ftable_e;
+inline static std::string gen_shared_path(std::string& filename) {
+    std::string shared_filename(shared_partition);
+    shared_filename.append(filename);
+    return shared_filename;
+}
+
+inline static std::string gen_proc_path(std::string& filename) {
+    std::string proc_filename(per_proces_partition);
+    proc_filename[proc_filename.size()-2] = (char)('0'+vm_id);
+    proc_filename.append(filename);
+    return proc_filename;
+}
+
+typedef struct {
+    FILE* dsc;
+    std::string filename;
+    char mode[5];
+    bool is_shared;
+} ftable_e;
 
 uint16_t free_entry = 3;
 ftable_e ftable[MAX_FILE];
 
 static int fopen_routine(const char* filename, const char* mode) {
-    std::string shared_filename(shared_partition);
-    shared_filename.append(filename);
+    std::string file(filename);
+    std::string shared_filename = gen_shared_path(file);
+    std::string proc_filename = gen_proc_path(file);
     
-    std::string proc_filename(per_proces_partition);
-    proc_filename[proc_filename.size()-3] = (char)('0'+vm_id);
-    proc_filename.append(filename); 
+    strcpy(ftable[free_entry].mode, mode);
+    ftable[free_entry].filename = {filename};
     if (access(shared_filename.c_str(), F_OK) == 0 ) {
         filename = shared_filename.c_str();
+        ftable[free_entry].is_shared = true;
     } else {
         filename = proc_filename.c_str();
+        ftable[free_entry].is_shared = false;
     }
 
     int ret = 0;
     try {
-        ftable[free_entry] = fopen(filename, mode);
+        ftable[free_entry].dsc = fopen(filename, mode);
         ret = free_entry++;
     } catch (std::exception) { }
 
+    return ret;
+}
+
+static int fclose_routine(int vfd) {
+    int ret = -1;
+    try {
+        ftable_e fd = ftable[vfd];
+        ret = fclose(fd.dsc);
+    } catch (std::exception) { }
+
+    return ret;
+}
+
+static int fputc_routine(int c, int vfd) {
+    int ret = -1;
+    try {
+        ftable_e& fd = ftable[vfd];
+        if (fd.is_shared) {
+            std::string shared_filename = gen_shared_path(fd.filename);
+            std::string proc_filename = gen_proc_path(fd.filename);
+            std::filesystem::copy(shared_filename, proc_filename);
+            fd.dsc = fopen(proc_filename.c_str(), fd.mode);
+            fd.is_shared = false;
+        }
+        ret = fputc(c, fd.dsc);
+    } catch(std::exception) { }
+    return ret;
+}
+
+static int fgetc_routine(int vfd) {
+    int ret = -1;
+    try {
+        ftable_e fd = ftable[vfd];
+        ret = fgetc(fd.dsc);
+    } catch(std::exception) { }
     return ret;
 }
 
@@ -417,18 +473,31 @@ static void system_call_routine(struct vm* v) {
     long op_code = regs.rax;
     long arg1r = regs.rbx,
          arg2r = regs.rcx;
-    char *filename, *mode, byte;
-    int fd;
+    char *filename, *mode;
+    int vfd, c;
+    //printf("op_code: %ld\targ1r: %ld\targ2r: %ld\n", op_code, arg1r, arg2r);
     switch(op_code) {
-        case 0:
+        case 0: // fopen
             filename = (char*)(arg1r+v->mem_start);
             mode = (char*)(arg2r+v->mem_start);
             regs.rax = (uint64_t)fopen_routine(filename, mode);
             break;
-        case 1:
-        case 2:
-        case 3:
-        default: break;
+        case 1: // fclose
+            vfd = (int)arg1r;
+            regs.rax = (uint64_t)fclose_routine(vfd);
+            break;
+        case 2: // fputc
+            c = (int)arg1r;
+            vfd = (int)arg2r;
+            regs.rax = (uint64_t)fputc_routine(c, vfd);
+            break;
+        case 3: // fgetc
+            vfd = (int)arg1r;
+            regs.rax = (uint64_t)fgetc_routine(vfd);
+            break;
+        default: 
+            LOG("[VM]", "Unknown syscall.", RED_PREFIX);
+            break;
     }
 
     if (ioctl(v->vcpu_fd, KVM_SET_REGS, &regs) < 0) {
