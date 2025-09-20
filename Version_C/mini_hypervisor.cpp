@@ -10,6 +10,7 @@
 #include <sys/sendfile.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <vector>
 #include <string>
 #include <filesystem>
 
@@ -42,8 +43,6 @@
 #define EFER_LME (1ULL << 8)
 #define EFER_LMA (1ULL << 10)
 
-#define MAX_VM 8
-#define MAX_FILE 8
 #define FIO_PORT 0x278
 #define CIO_PORT 0xE9
 
@@ -56,16 +55,15 @@
 
 typedef struct {
     size_t memory_sz, page_sz;
-    uint8_t n_guests, n_files;
-    char guest_path[MAX_VM][50];
-    char file_path[MAX_FILE][50];
+    std::vector<std::string> guest_path;
+    std::vector<std::string> file_path;
 } args_t;
 
-const char* drive = "drive";
-const char* shared_partition = "drive/shared/";
-const char* per_proces_partition = "drive/proc_/";
+const std::string drive = "drive";
+const std::string shared_prtt = "drive/shared/";
+const std::string proc_prtt = "drive/proc%d/";
 
-int read_args(int argc, char* argv[], args_t* myArgs) {
+int read_args(int argc, char* argv[], args_t& myArgs) {
     /* read args
        ./mini_hypervisor --memory 4 --page 2 --guest guest.img [guest2.img]
        error codes:
@@ -90,45 +88,41 @@ int read_args(int argc, char* argv[], args_t* myArgs) {
             if (is_set.mem) return 3;
             int val = atoi(argv[i+1]);
             if (val != 2 && val != 4 && val != 8) return 4;
-            myArgs->memory_sz = val << 20; 
+            myArgs.memory_sz = val << 20; 
             is_set.mem = 1;
         } else if (strcmp(argv[i], "-p") == 0 || strcmp(argv[i], "--page") == 0) {
             if (is_set.pg) return 3;
             int val = atoi(argv[i+1]);
             if (val == 2)
-                myArgs->page_sz = val << 20;
+                myArgs.page_sz = val << 20;
             else if (val == 4)
-                myArgs->page_sz = val << 10;
+                myArgs.page_sz = val << 10;
             else 
                 return 4;
             is_set.pg = 1;
         } else if (strcmp(argv[i], "-g") == 0 || strcmp(argv[i], "--guest") == 0) {
             if (is_set.guest) return 3;
-            myArgs->n_guests = 0;
-            for (int j = 0; j < MAX_VM; ++j) {
+            while(++i < argc && argv[i][0] != '-') {
 
-
-                if (i+j+1 >= argc || argv[i+j+1][0] == '-') break;
-                if (access(argv[i+j+1], X_OK) != 0) return 4;
+                if (access(argv[i], X_OK) != 0) return 4;
                 
-                myArgs->n_guests++;
-                strcpy(myArgs->guest_path[j], argv[i+j+1]);
+                myArgs.guest_path.push_back(argv[i]);
             }
+            if (myArgs.guest_path.size() == 0) return 1;
             is_set.guest = 1;
-            i += myArgs->n_guests-1;
+            i -= 2;
             
         } else if (strcmp(argv[i], "-f") == 0 || strcmp(argv[i], "--file") == 0) {
             if (is_set.file) return 3;
-            myArgs->n_files = 0;
-            for (int j = 0; j < MAX_FILE; ++j) {
+            while(++i < argc && argv[i][0] != '-') {
 
-                if (i+j+1 >= argc || argv[i+j+1][0] == '-') break;
+                if (access(argv[i], F_OK) != 0) return 4;
                 
-                myArgs->n_files++;
-                strcpy(myArgs->file_path[j], argv[i+j+1]);
+                myArgs.file_path.push_back(argv[i]);
             }
+            if (myArgs.file_path.size() == 0) return 1;
             is_set.file = 1;
-            i += myArgs->n_files-1;
+            i -= 2;
         }
     }
     return 0;
@@ -332,45 +326,6 @@ int load_guest_image(struct vm* v, const char* path) {
 	return 0;
 }
 
-static int cp_file(const char* src, const char* dst) {
-    int in_fd  = open(src, O_RDONLY);
-    int out_fd = open(dst, O_WRONLY | O_CREAT | O_TRUNC, 0666);
-    if (in_fd < 0 || out_fd < 0) return -1;
-
-    off_t offset = 0;
-    struct stat st;
-    fstat(in_fd, &st);
-    sendfile(out_fd, in_fd, &offset, st.st_size);
-
-    close(in_fd);
-    close(out_fd);
-    return 0;
-}
-
-static int partition_drive(args_t* myArgs) {
-    
-    char src[100];
-    // create folders
-    mkdir(drive, 0777);
-    mkdir(shared_partition, 0777);
-    for (int i=0; i<myArgs->n_guests; ++i) {
-        strcpy(src, per_proces_partition); src[10]=(char)('0'+i);
-        mkdir(src, 0777);
-    }
-
-    // create/copy files
-    for (int i=0; i<myArgs->n_files; ++i) {
-        strcpy(src, shared_partition); strcat(src, myArgs->file_path[i]);
-
-        if (0 == access(myArgs->file_path[i], R_OK)) {
-            cp_file(myArgs->file_path[i], src);
-        } else {
-            open(src, O_CREAT);
-        }
-    }
-    return 0;
-}
-
 int set_context(struct vm* v) {
     struct kvm_regs regs;
     memset(&regs, 0, sizeof(regs));
@@ -387,19 +342,6 @@ int set_context(struct vm* v) {
 
 static int vm_id;
 
-inline static std::string gen_shared_path(std::string& filename) {
-    std::string shared_filename(shared_partition);
-    shared_filename.append(filename);
-    return shared_filename;
-}
-
-inline static std::string gen_proc_path(std::string& filename) {
-    std::string proc_filename(per_proces_partition);
-    proc_filename[proc_filename.size()-2] = (char)('0'+vm_id);
-    proc_filename.append(filename);
-    return proc_filename;
-}
-
 typedef struct {
     FILE* dsc;
     std::string filename;
@@ -407,28 +349,62 @@ typedef struct {
     bool is_shared;
 } ftable_e;
 
-uint16_t free_entry = 3;
-ftable_e ftable[MAX_FILE];
+std::vector<ftable_e> ftable;
+
+inline static std::string& proc_path(std::string& path, int id) {
+    return path.replace(path.find("%d"), 2, std::to_string(id));
+}
+
+static int filesys_setup(args_t& myArgs) {
+
+    // create folders
+    std::filesystem::remove_all(drive);                 // remove mounted drive
+    std::filesystem::create_directories(shared_prtt);   // create shared dir
+    for (int i=0; i<myArgs.guest_path.size(); ++i) {
+        std::string proc_dir(proc_prtt);
+        proc_path(proc_dir, i);
+        printf("%s\n", proc_dir.c_str());
+        std::filesystem::create_directories(proc_dir);
+    }
+
+    // create/copy files
+    for (int i=0; i<myArgs.file_path.size(); ++i) {
+        std::string vfilepath(shared_prtt);
+        std::string rfilepath(myArgs.file_path[i]);
+        vfilepath.append(rfilepath);
+
+        if (0 == access(rfilepath.c_str(), R_OK)) {
+            std::filesystem::copy(rfilepath, vfilepath);
+        } else {
+            FILE* fd = fopen(vfilepath.c_str(), "w+");
+            fclose(fd);
+        }
+    }
+    return 0;
+}
 
 static int fopen_routine(const char* filename, const char* mode) {
-    std::string file(filename);
-    std::string shared_filename = gen_shared_path(file);
-    std::string proc_filename = gen_proc_path(file);
+    std::string shared_filename(shared_prtt);
+    shared_filename.append(filename);
+    std::string proc_filename(proc_prtt);
+    proc_path(proc_filename, vm_id).append(filename);
     
-    strcpy(ftable[free_entry].mode, mode);
-    ftable[free_entry].filename = {filename};
+    ftable_e entry;
+    strcpy(entry.mode, mode);
+    entry.filename = {filename};
     if (access(shared_filename.c_str(), F_OK) == 0 ) {
         filename = shared_filename.c_str();
-        ftable[free_entry].is_shared = true;
+        entry.is_shared = true;
     } else {
         filename = proc_filename.c_str();
-        ftable[free_entry].is_shared = false;
+        entry.is_shared = false;
     }
 
     int ret = 0;
     try {
-        ftable[free_entry].dsc = fopen(filename, mode);
-        ret = free_entry++;
+        entry.dsc = fopen(filename, mode);
+        ftable.push_back(entry);
+        ret = ftable.size()-1;
     } catch (std::exception) { }
 
     return ret;
@@ -437,8 +413,9 @@ static int fopen_routine(const char* filename, const char* mode) {
 static int fclose_routine(int vfd) {
     int ret = -1;
     try {
-        ftable_e fd = ftable[vfd];
+        ftable_e& fd = ftable[vfd];
         ret = fclose(fd.dsc);
+        fd.dsc = 0;
     } catch (std::exception) { }
 
     return ret;
@@ -449,8 +426,11 @@ static int fputc_routine(int c, int vfd) {
     try {
         ftable_e& fd = ftable[vfd];
         if (fd.is_shared) {
-            std::string shared_filename = gen_shared_path(fd.filename);
-            std::string proc_filename = gen_proc_path(fd.filename);
+            std::string shared_filename(shared_prtt);
+            shared_filename.append(ftable[vfd].filename);
+            std::string proc_filename(proc_prtt);
+            proc_path(proc_filename, vm_id).append(ftable[vfd].filename);
+
             std::filesystem::copy(shared_filename, proc_filename);
             fd.dsc = fopen(proc_filename.c_str(), fd.mode);
             fd.is_shared = false;
@@ -563,6 +543,9 @@ int run(struct vm* v, uint8_t p_ix) {
                 msg_recv = 1;
                 if (v->run->io.direction == KVM_EXIT_IO_IN && 
                     v->run->io.port == CIO_PORT) {
+                    buf[cur] = '\0';
+                    LOG(src, buf, NORMAL_PREFIX);
+                    cur = 0;
                     char *p = (char *)v->run;
                     *(p + v->run->io.data_offset) = getchar();
                 } else if (v->run->io.direction == KVM_EXIT_IO_OUT && 
@@ -608,14 +591,14 @@ int run(struct vm* v, uint8_t p_ix) {
     return status;
 }
 
-int child_main(args_t* myArgs, uint8_t p_ix) {
+int child_main(args_t& myArgs) {
     int status;
     char src[20];
-    sprintf(src, "[VM-%d]", p_ix);
+    sprintf(src, "[VM-%d]", vm_id);
 
     // init vm
     struct vm v;
-    status = vm_init(&v, myArgs->memory_sz, myArgs->page_sz);
+    status = vm_init(&v, myArgs.memory_sz, myArgs.page_sz);
     switch (status) {
         case 0x00: LOG(src, "VM inited successfully.", GREEN_PREFIX); break;
         case 0x10: LOG(src, "Couldn't open /dev/kvm.", RED_PREFIX); break;
@@ -646,7 +629,7 @@ int child_main(args_t* myArgs, uint8_t p_ix) {
     if (status != 0)
         goto cleanup;
 
-    status = load_guest_image(&v, myArgs->guest_path[p_ix]);
+    status = load_guest_image(&v, myArgs.guest_path[vm_id].c_str());
     switch (status) {
         case 0x00: LOG(src, "Guest Image loaded successfully.", GREEN_PREFIX); break;
         case 0x30: LOG(src, "Failed to open guest image.", RED_PREFIX); break;
@@ -670,7 +653,7 @@ int child_main(args_t* myArgs, uint8_t p_ix) {
     if (status != 0)
         goto cleanup;
 
-    status = run(&v, p_ix);
+    status = run(&v, vm_id);
     switch(status) {
         case 0x00: LOG(src, "Graceful exit - HLT reached.", GREEN_PREFIX); break;
         case 0x50: LOG(src, "KVM_RUN", RED_PREFIX); break;
@@ -692,7 +675,7 @@ int main(int argc, char* argv[]) {
     // read args
     char src[50];
     args_t myArgs = {0};
-    int status = read_args(argc, argv, &myArgs);
+    int status = read_args(argc, argv, myArgs);
     switch (status) {
         case 0: LOG("[HOST]", "Args read successfully.", GREEN_PREFIX); break;
         case 1: LOG("[HOST]", "Invalid arg format. Try:\nexe (--memory|-m) <m> (--page|-p) <p> (--guest|-g) <g> [--file|-f <f>]\nwhere <m> is either 2, 4 or 8 and <p> either 2 or 4, and <g> an executable file", RED_PREFIX); break;
@@ -705,7 +688,15 @@ int main(int argc, char* argv[]) {
     if (status != 0) 
         return status;
 
-    status = partition_drive(&myArgs);
+    // printf("m: %d, p: %d", myArgs.memory_sz, myArgs.page_sz);
+    // for (std::string& e : myArgs.file_path) {
+    //     printf("f: %s\n", e.c_str());
+    // }
+    // for (std::string& e : myArgs.guest_path) {
+    //     printf("g: %s\n", e.c_str());
+    // }
+
+    status = filesys_setup(myArgs);
     switch(status) {
         case 0: LOG("[HOST]", "Disk partitioned successfully.", GREEN_PREFIX); break;
         default:LOG("[HOST]", "Disk partitioned failed", RED_PREFIX) break;
@@ -714,7 +705,7 @@ int main(int argc, char* argv[]) {
     if (status != 0)
         return status;
 
-    for (uint8_t p_ix = 0; p_ix < myArgs.n_guests; ++p_ix) {
+    for (uint8_t p_ix = 0; p_ix < myArgs.guest_path.size(); ++p_ix) {
         pid_t pid = fork();
 
         if (pid < 0) {
@@ -728,7 +719,7 @@ int main(int argc, char* argv[]) {
             LOG(src, "Starting process", GREEN_PREFIX);
             vm_id = p_ix;
 
-            return child_main(&myArgs, p_ix);
+            return child_main(myArgs);
         } else {
             sprintf(src, "VM-%d started with PID %d", p_ix, pid);
             LOG("[HOST]", src, GREEN_PREFIX);
@@ -736,7 +727,7 @@ int main(int argc, char* argv[]) {
     }
 
     int p_status;
-    for (int ix = 0; ix < myArgs.n_guests; ++ix) {
+    for (int ix = 0; ix < myArgs.guest_path.size(); ++ix) {
         pid_t pid = wait(&p_status);
         
         sprintf(src, "VM-%d returned with status: %d", pid, p_status);
