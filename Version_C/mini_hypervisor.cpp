@@ -413,9 +413,8 @@ static int fopen_routine(const char* filename, const char* mode) {
 static int fclose_routine(int vfd) {
     int ret = -1;
     try {
-        ftable_e& fd = ftable[vfd];
+        ftable_e fd = ftable[vfd];
         ret = fclose(fd.dsc);
-        fd.dsc = 0;
     } catch (std::exception) { }
 
     return ret;
@@ -542,10 +541,12 @@ int run(struct vm* v, uint8_t p_ix) {
 			case KVM_EXIT_IO:
                 msg_recv = 1;
                 if (v->run->io.direction == KVM_EXIT_IO_IN && 
-                    v->run->io.port == CIO_PORT) {
-                    buf[cur] = '\0';
-                    LOG(src, buf, NORMAL_PREFIX);
-                    cur = 0;
+                        v->run->io.port == CIO_PORT) {
+                    if (cur > 0) {
+                        buf[cur] = '\0';
+                        LOG(src, buf, NORMAL_PREFIX);
+                        cur = 0;
+                    }
                     char *p = (char *)v->run;
                     *(p + v->run->io.data_offset) = getchar();
                 } else if (v->run->io.direction == KVM_EXIT_IO_OUT && 
