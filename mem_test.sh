@@ -20,16 +20,11 @@ fi
 
 mem_values="2 4 8"
 page_values="2 4"
-guests=("$guest")
-
-if [[ "$1" == "B" ]]; then
-    guests+=("$guest" "$guest" "$guest" "$guest" "$guest")
-fi
 
 for m in $mem_values; do
 
     for p in $page_values; do
-        $program -m "$m" -p "$p" -g "${guests[@]}" 1>/dev/null 2>/dev/null
+        $program -m "$m" -p "$p" -g "$guest" 1>/dev/null 2>/dev/null
         ret=$?
         if [[ $ret -eq 0 ]]; then
             color="\x1b[32m"    # green

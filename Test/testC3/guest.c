@@ -30,6 +30,18 @@ char getc() {
 	return ret;
 }
 
+void puts(const char* s) {
+	for (const char* p = s; *p; putc(*p++));
+}
+
+void gets(char* s) {
+	int c;
+    while ((c = getc()) != EOF && c != '\n') {
+        *s++ = (char)c;
+    }
+    *s = '\0';
+}
+
 static inline long syscall(long num, long arg1, long arg2) {
     register long rax asm("rax") = num;
     register long rbx asm("rbx") = arg1;
@@ -69,31 +81,32 @@ void
 __attribute__((noreturn))
 __attribute__((section(".start")))
 _start(void) {
-	const char *p;
-
-	char ch;
-	while((ch = getc()) != 'e') {
-		putc(ch);
-	}
-
-	for (p = "Hello, world!\n"; *p; ++p)
-		outb(0xE9, *p);
-
-	// reading from shared file
-	int fd = fopen("Makefile", "a+");
+	
+	char src_filename[100], dst_filename[100];
 	char c;
-	fputc('x', fd);
-	while((c = fgetc(fd)) != EOF) {
-		putc(c);
+
+	puts("Enter copy src file: ");
+	gets(src_filename);
+	int src_fd = fopen(src_filename, "r");
+	if (src_fd == 0) {
+		puts("Cannot open src file for reading.\n");
+		goto done;
 	}
-	fclose(fd);
+	puts("Enter copy dst file: ");
+	gets(dst_filename);
+	int dst_fd = fopen(dst_filename, "w+");
+	if (src_fd == 0) {
+		puts("Cannot open dst file for writing.\n");
+		goto done;
+	}
+	
+	while( (c = fgetc(src_fd)) != EOF) {
+		fputc(c, dst_fd);
+	}
 
-	// writing to proc-specific file
-	int fd2 = fopen("custom.txt", "w");
-	for (p = "Hello, world!\n"; *p; ++p)
-		fputc(*p, fd2);
-	fclose(fd2);
+	puts("Finished file copy.");
 
+done:
 	for (;;)
 		asm("hlt");
 }
