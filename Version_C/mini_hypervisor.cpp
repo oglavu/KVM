@@ -25,12 +25,12 @@
     printf("%s%s%s %s\n", color, src, NORMAL_PREFIX, txt); \
 }
 
-#define PML4_ADDR 0x1FF000
-#define PDP_ADDR  0x1FE000
-#define PD_ADDR   0x1FD000
-#define PT_ADDR   0x1F9000
-#define GUEST_START_ADDR    0x000000
-#define STACK_START_ADDR     0x1F9000
+#define PML4_OFF 0x1000
+#define PDP_OFF  0x2000
+#define PD_OFF   0x3000
+#define PT_OFF   0x7000
+#define GUEST_START_ADDR    0x0000
+#define STACK_START_OFF     0x7000
 
 // PDE bitovi
 #define PDE64_PRESENT (1ULL << 0)
@@ -248,13 +248,15 @@ int setup_long_mode(struct vm* v, struct kvm_sregs* sregs) {
     if (ioctl(v->vcpu_fd, KVM_GET_SREGS, sregs) != 0)
 		return 0x20;
 
-	uint64_t pml4_addr = PML4_ADDR;
+    const static uint64_t MEM_END = v->mem_size;
+
+	uint64_t pml4_addr = MEM_END - PML4_OFF;
 	uint64_t *pml4 = (uint64_t *)(v->mem_start + pml4_addr);
 
-	uint64_t pdpt_addr = PDP_ADDR;
+	uint64_t pdpt_addr = MEM_END - PDP_OFF;
 	uint64_t *pdpt = (uint64_t *)(v->mem_start + pdpt_addr);
 
-	uint64_t pd_addr = PD_ADDR;
+	uint64_t pd_addr = MEM_END - PD_OFF;
 	uint64_t *pd = (uint64_t *)(v->mem_start + pd_addr);
 
 	pml4[0] = PDE64_PRESENT | PDE64_RW | PDE64_USER | pdpt_addr;
@@ -274,7 +276,7 @@ int setup_long_mode(struct vm* v, struct kvm_sregs* sregs) {
         for (uint64_t ix = 0; ix < n_pde; ++ix) {
             const uint16_t n_pages = 512;
 
-            uint64_t pt_addr = PT_ADDR + (ix * 0x1000);
+            uint64_t pt_addr = MEM_END - PT_OFF + (ix * 0x1000);
             uint64_t *pt = (uint64_t *)(v->mem_start + pt_addr);
 
             pd[ix] = pt_addr | PDE64_PRESENT | PDE64_RW | PDE64_USER;
@@ -337,7 +339,7 @@ int set_context(struct vm* v) {
     memset(&regs, 0, sizeof(regs));
 
     regs.rip = GUEST_START_ADDR; 
-	regs.rsp = STACK_START_ADDR; // SP raste nadole
+	regs.rsp = v->mem_size - STACK_START_OFF; // SP raste nadole
     regs.rflags = 0x2;
 
 	if (ioctl(v->vcpu_fd, KVM_SET_REGS, &regs) < 0) {
