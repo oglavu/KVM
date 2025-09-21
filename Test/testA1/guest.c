@@ -81,7 +81,7 @@ _start(void) {
 		if (getc() == '\n') break; // whitespace
 	}
 
-	puts("Access & Modify memory ( u | d | o XX | i XX )");
+	puts("Access & Modify memory ( u | d | o XX | i XX | r XX )");
 
 	char c; it = page;
 	while((c = getc()) != '\n') {

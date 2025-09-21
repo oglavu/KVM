@@ -13,9 +13,12 @@
 #include <vector>
 #include <string>
 #include <filesystem>
+#include <iostream>
+#include <semaphore.h>
 
 #define GREEN_PREFIX "\x1b[32m"
 #define RED_PREFIX "\x1b[31m"
+#define DARK_GREEN "\x1b[33m"
 #define NORMAL_PREFIX "\x1b[0m"
 
 #define LOG(src, txt, color) { \
@@ -53,12 +56,15 @@
 #define SYS_FTELL 4
 #define SYS_FSEEK 5
 
+sem_t* mux;
+
 typedef struct {
     size_t memory_sz, page_sz;
     std::vector<std::string> guest_path;
     std::vector<std::string> file_path;
 } args_t;
 
+const std::string shared_sem = "/kvm_sem";
 const std::string drive = "drive";
 const std::string shared_prtt = "drive/shared/";
 const std::string proc_prtt = "drive/proc%d/";
@@ -357,13 +363,19 @@ inline static std::string& proc_path(std::string& path, int id) {
 
 static int filesys_setup(args_t& myArgs) {
 
+    sem_unlink(shared_sem.c_str());
+    mux = sem_open(shared_sem.c_str(), O_CREAT, 0666, 1);
+    if (mux == SEM_FAILED) {
+        LOG("[HOST]", "Couldn't open mutex", RED_PREFIX);
+        return -1;
+    }
+
     // create folders
     std::filesystem::remove_all(drive);                 // remove mounted drive
     std::filesystem::create_directories(shared_prtt);   // create shared dir
     for (int i=0; i<myArgs.guest_path.size(); ++i) {
         std::string proc_dir(proc_prtt);
         proc_path(proc_dir, i);
-        printf("%s\n", proc_dir.c_str());
         std::filesystem::create_directories(proc_dir);
     }
 
@@ -519,9 +531,11 @@ static void system_call_routine(struct vm* v) {
 }
 
 
-int run(struct vm* v, uint8_t p_ix) {
+int run(struct vm* v) {
     char src[20];
-    sprintf(src, "[GUEST-%d]", p_ix);
+    char vm_src[20];
+    sprintf(src, "[GUEST-%d]", vm_id);
+    sprintf(vm_src, "[VM-%d]", vm_id);
     struct kvm_regs regs;
     int stop = 0;
     int msg_recv = 0;
@@ -529,6 +543,17 @@ int run(struct vm* v, uint8_t p_ix) {
     static const int N = 100;
     char buf[N + 1];
     int cur = 0;
+    std::string bufi;
+
+    auto flush = [&](void) -> void {
+        sem_wait(mux);
+        if (cur > 0) {
+            buf[cur] = '\0';
+            LOG(src, buf, NORMAL_PREFIX);
+            cur = 0;
+        }
+        sem_post(mux);
+    };
     
 	while(stop == 0) {
 		int ret = ioctl(v->vcpu_fd, KVM_RUN, 0);
@@ -542,13 +567,18 @@ int run(struct vm* v, uint8_t p_ix) {
                 msg_recv = 1;
                 if (v->run->io.direction == KVM_EXIT_IO_IN && 
                         v->run->io.port == CIO_PORT) {
-                    if (cur > 0) {
-                        buf[cur] = '\0';
-                        LOG(src, buf, NORMAL_PREFIX);
-                        cur = 0;
-                    }
+                    flush();
                     char *p = (char *)v->run;
-                    *(p + v->run->io.data_offset) = getchar();
+                    char *c = (p + v->run->io.data_offset);
+                    if (bufi.size() == 0) {
+                        sem_wait(mux);
+                        printf("%s%s%s ", DARK_GREEN, vm_src, NORMAL_PREFIX);
+                        std::getline(std::cin, bufi);
+                        sem_post(mux);
+                        bufi.append("\n");
+                    }
+                    *c = bufi[0];
+                    bufi.replace(0, 1, "");
                 } else if (v->run->io.direction == KVM_EXIT_IO_OUT && 
                         v->run->io.port == CIO_PORT) {
 					char *p = (char *)v->run;
@@ -556,9 +586,7 @@ int run(struct vm* v, uint8_t p_ix) {
                     if (cur < N && c != '\n') 
                         buf[cur++] = c;
                     if (c == '\n' || cur == N) {
-                        buf[cur] = '\0';
-                        LOG(src, buf, NORMAL_PREFIX);
-                        cur = 0;
+                        flush();
                     }
                 } else if (v->run->io.direction == KVM_EXIT_IO_OUT && 
                         v->run->io.port == FIO_PORT) {
@@ -579,11 +607,7 @@ int run(struct vm* v, uint8_t p_ix) {
   	}
 
     // empty the buf before exit
-    if (cur > 0) {
-        buf[cur] = '\0';
-        LOG(src, buf, NORMAL_PREFIX);
-        fflush(stdout); fflush(stderr);
-    }
+    flush();
 
     if (!msg_recv && !status) {
         status = 0x53;
@@ -654,7 +678,7 @@ int child_main(args_t& myArgs) {
     if (status != 0)
         goto cleanup;
 
-    status = run(&v, vm_id);
+    status = run(&v);
     switch(status) {
         case 0x00: LOG(src, "Graceful exit - HLT reached.", GREEN_PREFIX); break;
         case 0x50: LOG(src, "KVM_RUN", RED_PREFIX); break;
@@ -735,6 +759,7 @@ int main(int argc, char* argv[]) {
         LOG("[HOST]", src, (p_status == 0 ? GREEN_PREFIX : RED_PREFIX));
         status |= p_status;
     }
+    sem_unlink(shared_sem.c_str());
 
     return status;
 }
