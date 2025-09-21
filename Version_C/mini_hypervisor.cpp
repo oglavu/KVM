@@ -388,12 +388,20 @@ static int filesys_setup(args_t& myArgs) {
         vfilepath.append(rfilepath);
 
         if (0 == access(rfilepath.c_str(), R_OK)) {
-            std::filesystem::copy(rfilepath, vfilepath);
+            std::filesystem::copy(rfilepath, vfilepath, std::filesystem::copy_options::recursive);
         } else {
             FILE* fd = fopen(vfilepath.c_str(), "w+");
             fclose(fd);
         }
     }
+
+    ftable_e entry = {
+        .dsc = 0,
+        .filename = "",
+        .mode = "w+",
+        .is_shared = false,
+    };
+    ftable.push_back(entry);
     return 0;
 }
 
@@ -445,8 +453,13 @@ static int fputc_routine(int c, int vfd) {
             proc_path(proc_filename, vm_id).append(ftable[vfd].filename);
 
             std::filesystem::copy(shared_filename, proc_filename);
+            
+            long cursor = ftell(fd.dsc);
+            fclose(fd.dsc);
+
             fd.dsc = fopen(proc_filename.c_str(), fd.mode);
             fd.is_shared = false;
+            fseek(fd.dsc, cursor, SEEK_SET);
         }
         ret = fputc(c, fd.dsc);
     } catch(std::exception) { }
