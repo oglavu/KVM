@@ -10,11 +10,11 @@ BIN_DIR   := bin
 
 HV_BIN := $(BIN_DIR)/mini_hypervisor.a
 
-CXXFLAGS    := -O2 -g -Wall -Wextra
+CXXFLAGS    := -O2 -g -Wall -Wextra -I$(INC_DIR)
 LDFLAGS_HV  := -lpthread
 
 GUEST_CFLAGS := -m64 -ffreestanding -fno-pic -Wall -Wextra \
-		-I$(INC_DIR)
+		-I$(INC_DIR) -DGUEST_BUILD
 
 # Discover tests
 TEST_DIRS  := $(sort $(wildcard $(TEST_DIR)/test*))
@@ -43,8 +43,8 @@ hypervisor: $(HV_BIN)
 $(BUILD_DIR)/syscall.o: $(SRC_DIR)/syscall.c | $(BUILD_DIR)
 	$(CC) $(GUEST_CFLAGS) -c $< -o $@
 
-$(HV_BIN): $(SRC_DIR)/mini_hypervisor.cpp | $(BIN_DIR)
-	$(CXX) $(CXXFLAGS) $< -o $@ $(LDFLAGS_HV)
+$(HV_BIN): $(SRC_DIR)/*.cpp | $(BIN_DIR)
+	$(CXX) $(CXXFLAGS) $^ -o $@ $(LDFLAGS_HV)
 
 tests: $(GUEST_IMGS)
 

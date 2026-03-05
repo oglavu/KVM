@@ -8,6 +8,8 @@
 #define SYS_FTELL 4
 #define SYS_FSEEK 5
 
+#ifdef GUEST_BUILD
+
 #define EOF (int)-1
 
 
@@ -32,3 +34,5 @@ int fclose(int fd);
 long ftell(int fd);
 
 int fseek(int fd, long offset);
+
+#endif
