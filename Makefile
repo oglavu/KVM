@@ -2,6 +2,7 @@ CXX := g++
 CC  := gcc
 LD  := ld
 
+INC_DIR   := inc
 SRC_DIR   := src
 TEST_DIR  := test
 BUILD_DIR := build
@@ -12,7 +13,8 @@ HV_BIN := $(BIN_DIR)/mini_hypervisor.a
 CXXFLAGS    := -O2 -g -Wall -Wextra
 LDFLAGS_HV  := -lpthread
 
-GUEST_CFLAGS := -m64 -ffreestanding -fno-pic -Wall -Wextra
+GUEST_CFLAGS := -m64 -ffreestanding -fno-pic -Wall -Wextra \
+		-I$(INC_DIR)
 
 # Discover tests
 TEST_DIRS  := $(sort $(wildcard $(TEST_DIR)/test*))
@@ -22,7 +24,7 @@ TEST_TARGETS := $(TEST_NAMES)
 GUEST_IMGS := $(addprefix $(BIN_DIR)/,$(addsuffix .img,$(TEST_NAMES)))
 DEFAULT_GUEST_LD := guest.ld
 
-.PRECIOUS: $(BUILD_DIR)/%/guest.o 	# saves intermediary .o guest images
+.PRECIOUS: $(BUILD_DIR)/%/guest.o $(BUILD_DIR)/syscall.o	# saves intermediary .o guest images
 .PHONY: all hypervisor tests clean list $(TEST_TARGETS)
 
 all: hypervisor tests
@@ -38,6 +40,9 @@ $(BIN_DIR) $(BUILD_DIR):
 hypervisor: $(HV_BIN)
 	@echo "\033[32m[Hypervisor]\033[0m Compilation finished successfully!"
 
+$(BUILD_DIR)/syscall.o: $(SRC_DIR)/syscall.c | $(BUILD_DIR)
+	$(CC) $(GUEST_CFLAGS) -c $< -o $@
+
 $(HV_BIN): $(SRC_DIR)/mini_hypervisor.cpp | $(BIN_DIR)
 	$(CXX) $(CXXFLAGS) $< -o $@ $(LDFLAGS_HV)
 
@@ -50,13 +55,13 @@ $(BUILD_DIR)/%/guest.o: $(TEST_DIR)/%/guest.c | $(BUILD_DIR)
 	mkdir -p $(@D)
 	$(CC) $(GUEST_CFLAGS) -c $< -o $@
 
-$(BIN_DIR)/%.img: $(BUILD_DIR)/%/guest.o | $(BIN_DIR)
+$(BIN_DIR)/%.img: $(BUILD_DIR)/%/guest.o $(BUILD_DIR)/syscall.o | $(BIN_DIR)
 	@ldscript="$(TEST_DIR)/$*/guest.ld"; \
 	if [ ! -f "$$ldscript" ]; then \
 		ldscript="$(DEFAULT_GUEST_LD)"; \
 	fi; \
 	echo "LD  $@ (using $$ldscript)"; \
-	$(LD) -T "$$ldscript" "$(BUILD_DIR)/$*/guest.o" -o "$@" \
+	$(LD) -T "$$ldscript" "$(BUILD_DIR)/$*/guest.o" "$(BUILD_DIR)/syscall.o" -o "$@" \
 	&& echo "\033[32m[$*]\033[0m Compilation finished successfully!"
 
 clean:

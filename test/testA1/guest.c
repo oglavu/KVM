@@ -1,30 +1,5 @@
+#include "syscall.h"
 #include <stdint.h>
-
-#define EOL '\n'
-
-static const int CIO_PORT = 0xE9;
-
-static void outb(uint16_t port, uint8_t value) {
-	asm("outb %0,%1" : /* empty */ : "a" (value), "Nd" (port) : "memory");
-}
-
-static void inb(uint16_t port, uint8_t* value) {
-	asm("inb %1,%0" : "=a" (*value) : "Nd" (port) : "memory");
-}
-
-void putc(int c) {
-	outb(CIO_PORT, c);
-}
-
-char getc() {
-	uint8_t ret;
-	inb(CIO_PORT, (unsigned char*) &ret);
-	return (char)ret;
-}
-
-void puts(const char* s) {
-	for (const char* p = s; *p; putc(*p++));
-}
 
 int my_atoi(const char* str) {
 

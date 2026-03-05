@@ -17,6 +17,8 @@
 #include <iostream>
 #include <semaphore.h>
 
+#include "syscall.h"
+
 #define GREEN_PREFIX "\x1b[32m"
 #define RED_PREFIX "\x1b[31m"
 #define DARK_GREEN "\x1b[33m"
@@ -47,15 +49,8 @@
 #define EFER_LME (1ULL << 8)
 #define EFER_LMA (1ULL << 10)
 
-#define FIO_PORT 0x278
-#define CIO_PORT 0xE9
-
-#define SYS_FOPEN 0
-#define SYS_FCLOSE 1
-#define SYS_FPUTC 2
-#define SYS_FGETC 3
-#define SYS_FTELL 4
-#define SYS_FSEEK 5
+static const uint16_t FIO_PORT = 0x278;
+static const uint16_t CIO_PORT = 0xE9;
 
 sem_t* mux;
 sem_t* rwmux;
