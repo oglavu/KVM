@@ -90,39 +90,20 @@ _start(void) {
 	gets(filename);
 	puts(filename);
 
-	int shared_fd = fopen(filename, "r+");
-	if (shared_fd == 0) {
-		puts("Cannot open shared file for reading.\n");
+	int fd = fopen(filename, "w+");
+	if (fd == 0) {
+		puts("Cannot open file for writing.\n");
 		goto done;
 	}
-	puts("Opened shared file for reading.\n");
+	puts("Opened file for writing.\n");
 
-	puts("Enter characters to replace (<old> <new>): ");
-	char oc = getc();
-	getc();
-	char nc = getc();
-	getc();
-
-	putc(oc);
-	putc(nc);
+	puts("Enter up to 100 chars to be in file ");
+	gets(filename);
 	
-	int found = 0;
-	while((c = fgetc(shared_fd)) != EOF) {
-		putc(c);
-		if (c == oc) {
-			if (!found) {
-				puts("Found missmatch.");
-				gets(&c); // wait for approve
-				found =1;
-			}
-			long pos = ftell(shared_fd);
-			fseek(shared_fd, pos-1);
-			if (EOF == fputc(nc, shared_fd)) {
-				puts("fputc error\n");
-				goto done;
-			}
-		}
+	for (const char* p=filename; *p; p++) {
+		fputc(*p, fd);
 	}
+	fclose(fd);
 
 done:
 	for (;;)

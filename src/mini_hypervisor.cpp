@@ -57,6 +57,7 @@
 #define SYS_FSEEK 5
 
 sem_t* mux;
+sem_t* rwmux;
 
 typedef struct {
     size_t memory_sz, page_sz;
@@ -65,6 +66,7 @@ typedef struct {
 } args_t;
 
 const std::string shared_sem = "/kvm_sem";
+const std::string rw_sem = "/kvm_rw_sem";
 const std::string drive = "drive";
 const std::string shared_prtt = "drive/shared/";
 const std::string proc_prtt = "drive/proc%d/";
@@ -366,8 +368,14 @@ inline static std::string& proc_path(std::string& path, int id) {
 static int filesys_setup(args_t& myArgs) {
 
     sem_unlink(shared_sem.c_str());
+    sem_unlink(rw_sem.c_str());
     mux = sem_open(shared_sem.c_str(), O_CREAT, 0666, 1);
     if (mux == SEM_FAILED) {
+        LOG("[HOST]", "Couldn't open mutex", RED_PREFIX);
+        return -1;
+    }
+    rwmux = sem_open(rw_sem.c_str(), O_CREAT, 0666, 1);
+    if (rwmux == SEM_FAILED) {
         LOG("[HOST]", "Couldn't open mutex", RED_PREFIX);
         return -1;
     }
@@ -415,35 +423,45 @@ static int fopen_routine(const char* filename, const char* mode) {
     strcpy(entry.mode, mode);
     entry.filename = {filename};
     if (access(shared_filename.c_str(), F_OK) == 0 ) {
-        filename = shared_filename.c_str();
-        entry.is_shared = true;
+        if (mode[0] == 'w') {
+            std::filesystem::copy(shared_filename, proc_filename, std::filesystem::copy_options::recursive);
+            filename = proc_filename.c_str();
+            entry.is_shared = false;
+        } else {
+            filename = shared_filename.c_str();
+            entry.is_shared = true;
+        }
+        
     } else {
         filename = proc_filename.c_str();
         entry.is_shared = false;
     }
 
     int ret = 0;
+    sem_wait(rwmux);
     try {
         entry.dsc = fopen(filename, mode);
         ftable.push_back(entry);
         ret = ftable.size()-1;
     } catch (std::exception) { }
-
+    sem_post(rwmux);
     return ret;
 }
 
 static int fclose_routine(int vfd) {
     int ret = -1;
+    sem_wait(rwmux);
     try {
         ftable_e fd = ftable[vfd];
         ret = fclose(fd.dsc);
     } catch (std::exception) { }
-
+    sem_post(rwmux);
     return ret;
 }
 
 static int fputc_routine(int c, int vfd) {
     int ret = -1;
+    sem_wait(rwmux);
     try {
         ftable_e& fd = ftable[vfd];
         if (fd.is_shared) {
@@ -463,24 +481,29 @@ static int fputc_routine(int c, int vfd) {
         }
         ret = fputc(c, fd.dsc);
     } catch(std::exception) { }
+    sem_post(rwmux);
     return ret;
 }
 
 static int fgetc_routine(int vfd) {
     int ret = -1;
+    sem_wait(rwmux);
     try {
         ftable_e fd = ftable[vfd];
         ret = fgetc(fd.dsc);
     } catch(std::exception) { }
+    sem_post(rwmux);
     return ret;
 }
 
 static long ftell_routine(int vfd) {
     long ret = -1;
+    sem_wait(rwmux);
     try {
         ftable_e fd = ftable[vfd];
         ret = ftell(fd.dsc);
     } catch(std::exception) { }
+    sem_post(rwmux);
     return ret;
 }
 

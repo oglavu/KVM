@@ -8,13 +8,13 @@ fi
 
 program="./Version_$1/mini_hypervisor.a"
 if [[ ! -d "./Version_$1" ]] || [[ ! -x "$program" ]]; then
-    echo "\x1b[31m[TEST]\x1b[0m Error: Directory '$1' or program 'mini_hypervisor.a' not found or not executable."
+    echo -e "\x1b[31m[TEST]\x1b[0m Error: Directory '$1' or program 'mini_hypervisor.a' not found or not executable."
     exit 1
 fi
 
 guest="./Test/test$2/guest.img"
 if [[ ! -d "./Test/test$2" ]] || [[ ! -x "$guest" ]]; then
-    echo "\x1b[31m[TEST]\x1b[0m Error: Directory '$1' or program 'guest.img' not found or not executable."
+    echo -e "\x1b[31m[TEST]\x1b[0m Error: Directory '$1' or program 'guest.img' not found or not executable."
     exit 1
 fi
 

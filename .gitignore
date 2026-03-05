@@ -1,6 +1,4 @@
-*.a
-*.o
-*.img
 .vscode
+bin
 build
 drive
