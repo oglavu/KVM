@@ -26,7 +26,7 @@ void putc(int c) {
 
 char getc() {
 	char ret;
-	inb(CIO_PORT, &ret);
+	inb(CIO_PORT, (unsigned char*) &ret);
 	return ret;
 }
 

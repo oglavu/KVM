@@ -18,7 +18,7 @@ void putc(int c) {
 
 char getc() {
 	uint8_t ret;
-	inb(CIO_PORT, &ret);
+	inb(CIO_PORT, (unsigned char*) &ret);
 	return (char)ret;
 }
 
@@ -66,9 +66,6 @@ void
 __attribute__((noreturn))
 __attribute__((section(".start")))
 _start(void) {
-
-	char s[2];
-	uint8_t *it;
 	
 	for (int i=0; i<N; ++i) {
 		page[i][0] = i;

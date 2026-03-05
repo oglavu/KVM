@@ -18,7 +18,7 @@ void putc(int c) {
 
 char getc() {
 	uint8_t ret;
-	inb(CIO_PORT, &ret);
+	inb(CIO_PORT, (unsigned char*) &ret);
 	return (char)ret;
 }
 
@@ -106,7 +106,6 @@ _start(void) {
 			s[0] = getc();
 			s[1] = getc();
 			uint8_t off = hex_to_byte(s);
-			int sgn = (off & 0x80 ? -1 : 1);
 			uint8_t cnt = off & 0x7f;
 			uint8_t* start = (off & 0x80 ? it-cnt : it+1);
 			for (uint8_t i = 0; i < cnt-1; ++i) {

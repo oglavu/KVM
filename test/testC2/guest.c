@@ -26,7 +26,7 @@ void putc(int c) {
 
 char getc() {
 	char ret;
-	inb(CIO_PORT, &ret);
+	inb(CIO_PORT, (unsigned char*) &ret);
 	return ret;
 }
 
@@ -81,8 +81,6 @@ void
 __attribute__((noreturn))
 __attribute__((section(".start")))
 _start(void) {
-	const char *p;
-	char c;
 
 	// reading from shared file
 	char filename[100];

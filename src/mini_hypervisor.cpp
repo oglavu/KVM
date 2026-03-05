@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <getopt.h>
 #include <stdlib.h>
 #include <stdint.h>
 #include <string.h>
@@ -71,7 +72,20 @@ const std::string drive = "drive";
 const std::string shared_prtt = "drive/shared/";
 const std::string proc_prtt = "drive/proc%d/";
 
-int read_args(int argc, char* argv[], args_t& myArgs) {
+static int collect_nonopts(
+    int argc, char *argv[], int &idx,
+    std::vector<std::string> &out, int access_mode
+) {
+    while (idx < argc && argv[idx] && argv[idx][0] != '-') {
+        if (access(argv[idx], access_mode) != 0)
+            return 4;
+        out.emplace_back(argv[idx]);
+        ++idx;
+    }
+    return 0;
+}
+
+int read_args(int argc, char *argv[], args_t &myArgs) {
     /* read args
        ./mini_hypervisor --memory 4 --page 2 --guest guest.img [guest2.img]
        error codes:
@@ -84,55 +98,93 @@ int read_args(int argc, char* argv[], args_t& myArgs) {
     if (argc < 7)
         return 1;
 
-    struct {
-        uint8_t mem, pg, guest, file;
-    } is_set = {0};
-    
-    for (int i=1; i<argc; i += 2) {
-        if (argv[i][0] != '-') {
-            return 2;
-        } 
-        if (strcmp(argv[i], "-m") == 0 || strcmp(argv[i], "--memory") == 0) {
-            if (is_set.mem) return 3;
-            int val = atoi(argv[i+1]);
-            if (val != 2 && val != 4 && val != 8) return 4;
-            myArgs.memory_sz = val << 20; 
-            is_set.mem = 1;
-        } else if (strcmp(argv[i], "-p") == 0 || strcmp(argv[i], "--page") == 0) {
-            if (is_set.pg) return 3;
-            int val = atoi(argv[i+1]);
-            if (val == 2)
-                myArgs.page_sz = val << 20;
-            else if (val == 4)
-                myArgs.page_sz = val << 10;
-            else 
+    bool mem_set = false, 
+        page_set = false, 
+        guest_set = false, 
+        file_set = false;
+
+    static option longopts[] = {
+        {"memory",  required_argument,  nullptr,    'm'},
+        {"page",    required_argument,  nullptr,    'p'},
+        {"guest",   required_argument,  nullptr,    'g'},
+        {"file",    required_argument,  nullptr,    'f'},
+        {nullptr,   0,                  nullptr,    0}
+    };
+
+    const char *optstring = "+m:p:g:f:";
+
+    opterr = 0;
+    optind = 1;
+
+    int c;
+    while (-1 != (c = getopt_long(argc, argv, optstring, longopts, nullptr))){
+
+        switch (c) {
+        case 'm': {
+            if (mem_set)
+                return 3;
+            int val = std::atoi(optarg);
+            if (val != 2 && val != 4 && val != 8)
                 return 4;
-            is_set.pg = 1;
-        } else if (strcmp(argv[i], "-g") == 0 || strcmp(argv[i], "--guest") == 0) {
-            if (is_set.guest) return 3;
-            while(++i < argc && argv[i][0] != '-') {
+            myArgs.memory_sz = static_cast<size_t>(val) << 20;
+            mem_set = true;
+            break;
+        }
+        case 'p': {
+            if (page_set)
+                return 3;
+            int val = std::atoi(optarg);
 
-                if (access(argv[i], X_OK) != 0) return 4;
-                
-                myArgs.guest_path.push_back(argv[i]);
-            }
-            if (myArgs.guest_path.size() == 0) return 1;
-            is_set.guest = 1;
-            i -= 2;
-            
-        } else if (strcmp(argv[i], "-f") == 0 || strcmp(argv[i], "--file") == 0) {
-            if (is_set.file) return 3;
-            while(++i < argc && argv[i][0] != '-') {
+            if (val == 2)
+                myArgs.page_sz = static_cast<size_t>(val) << 20;
+            else if (val == 4)
+                myArgs.page_sz = static_cast<size_t>(val) << 10;
+            else
+                return 4;
 
-                if (access(argv[i], F_OK) != 0) return 4;
-                
-                myArgs.file_path.push_back(argv[i]);
+            page_set = true;
+            break;
+        }
+        case 'g': {
+            if (guest_set)
+                return 3;
+
+            if (access(optarg, X_OK) != 0)
+                return 4;
+            myArgs.guest_path.emplace_back(optarg);
+
+            int idx = optind;
+            int e = collect_nonopts(argc, argv, idx, myArgs.guest_path, X_OK);
+            if (e != 0) {
+                return e; // only 4
             }
-            if (myArgs.file_path.size() == 0) return 1;
-            is_set.file = 1;
-            i -= 2;
+            optind = idx;
+            guest_set = true;
+            break;
+        }
+        case 'f': {
+            if (file_set)
+                return 3;
+
+            if (access(optarg, F_OK) != 0)
+                return 4;
+            myArgs.file_path.emplace_back(optarg);
+
+            int idx = optind;
+            int e = collect_nonopts(argc, argv, idx, myArgs.file_path, F_OK);
+            if (e != 0) {
+                return e; // only 4
+            }
+            optind = idx;
+            file_set = true;
+            break;
+        }
+        case '?':
+        default:
+            return 2; // unknown option or missing required_argument
         }
     }
+
     return 0;
 }
 
@@ -172,9 +224,10 @@ int vm_init(struct vm *v, size_t mem_size, size_t page_size) {
 
     struct kvm_userspace_memory_region region = {
         .slot = 0,
+        .flags = KVM_MEM_LOG_DIRTY_PAGES,
         .guest_phys_addr = 0,
         .memory_size = v->mem_size, /* bytes */
-        .userspace_addr = (uintptr_t)v->mem_start, 
+        .userspace_addr = (uintptr_t)v->mem_start,
     };
 
     if (ioctl(v->vm_fd, KVM_SET_USER_MEMORY_REGION, &region) < 0) return 0x14;
@@ -221,20 +274,20 @@ void vm_destroy(struct vm* v) {
 
 static void setup_segments_64(struct kvm_sregs* sregs) {
 
-    // .selector = 0x8,
 	struct kvm_segment code = {
 		.base = 0,
 		.limit = ~0U,
         .selector = 0x8,
-        .type = 11, // Code: execute, read, accessed
-		.present = 1, // Prisutan ili učitan u memoriji
-		.dpl = 0, // Descriptor Privilage Level: 0 (0, 1, 2, 3)
-		.db = 0, // Default size - ima vrednost 0 u long modu
-		.s = 1, // Code/data tip segmenta
-		.l = 1, // Long mode - 1
-		.g = 1, // 4KB granularnost
+        .type = 11,     // Code: execute, read, accessed
+		.present = 1,   // Prisutan ili učitan u memoriji
+		.dpl = 0,       // Descriptor Privilage Level: 0 (0, 1, 2, 3)
+		.db = 0,        // Default size - ima vrednost 0 u long modu
+		.s = 1,         // Code/data tip segmenta
+		.l = 1,         // Long mode - 1
+		.g = 1,         // 4KB granularnost
+        .avl = 0,
         .unusable = 0,
-        
+        .padding = 0,
 	};
 	struct kvm_segment data = code;
 	data.type = 3; // Data: read, write, accessed
@@ -383,14 +436,14 @@ static int filesys_setup(args_t& myArgs) {
     // create folders
     std::filesystem::remove_all(drive);                 // remove mounted drive
     std::filesystem::create_directories(shared_prtt);   // create shared dir
-    for (int i=0; i<myArgs.guest_path.size(); ++i) {
+    for (size_t i=0; i<myArgs.guest_path.size(); ++i) {
         std::string proc_dir(proc_prtt);
         proc_path(proc_dir, i);
         std::filesystem::create_directories(proc_dir);
     }
 
     // create/copy files
-    for (int i=0; i<myArgs.file_path.size(); ++i) {
+    for (size_t i=0; i<myArgs.file_path.size(); ++i) {
         std::string vfilepath(shared_prtt);
         std::string rfilepath(myArgs.file_path[i]);
         vfilepath.append(rfilepath);
@@ -443,7 +496,7 @@ static int fopen_routine(const char* filename, const char* mode) {
         entry.dsc = fopen(filename, mode);
         ftable.push_back(entry);
         ret = ftable.size()-1;
-    } catch (std::exception) { }
+    } catch (std::exception const&) { }
     sem_post(rwmux);
     return ret;
 }
@@ -454,7 +507,7 @@ static int fclose_routine(int vfd) {
     try {
         ftable_e fd = ftable[vfd];
         ret = fclose(fd.dsc);
-    } catch (std::exception) { }
+    } catch (std::exception const&) { }
     sem_post(rwmux);
     return ret;
 }
@@ -480,7 +533,7 @@ static int fputc_routine(int c, int vfd) {
             fseek(fd.dsc, cursor, SEEK_SET);
         }
         ret = fputc(c, fd.dsc);
-    } catch(std::exception) { }
+    } catch(std::exception const&) { }
     sem_post(rwmux);
     return ret;
 }
@@ -491,7 +544,7 @@ static int fgetc_routine(int vfd) {
     try {
         ftable_e fd = ftable[vfd];
         ret = fgetc(fd.dsc);
-    } catch(std::exception) { }
+    } catch(std::exception const&) { }
     sem_post(rwmux);
     return ret;
 }
@@ -502,7 +555,7 @@ static long ftell_routine(int vfd) {
     try {
         ftable_e fd = ftable[vfd];
         ret = ftell(fd.dsc);
-    } catch(std::exception) { }
+    } catch(std::exception const&) { }
     sem_post(rwmux);
     return ret;
 }
@@ -512,7 +565,7 @@ static int fseek_routine(int vfd, long offset) {
     try {
         ftable_e fd = ftable[vfd];
         ret = fseek(fd.dsc, offset, SEEK_SET);
-    } catch(std::exception) { }
+    } catch(std::exception const&) { }
     return ret;
 }
 
@@ -737,7 +790,7 @@ int main(int argc, char* argv[]) {
 
     // read args
     char src[50];
-    args_t myArgs = {0};
+    args_t myArgs;
     int status = read_args(argc, argv, myArgs);
     switch (status) {
         case 0: LOG("[HOST]", "Args read successfully.", GREEN_PREFIX); break;
@@ -790,7 +843,7 @@ int main(int argc, char* argv[]) {
     }
 
     int p_status;
-    for (int ix = 0; ix < myArgs.guest_path.size(); ++ix) {
+    for (size_t ix = 0; ix < myArgs.guest_path.size(); ++ix) {
         pid_t pid = wait(&p_status);
         
         sprintf(src, "VM-%d returned with status: %d", pid, p_status);
