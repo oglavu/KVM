@@ -199,76 +199,76 @@ struct vm {
     int run_mmap_size;
 };
 
-int vm_init(struct vm *v, size_t mem_size, size_t page_size) {
+int vm_init(struct vm &v, size_t mem_size, size_t page_size) {
 
-	memset(v, 0, sizeof(*v));
-	v->kvm_fd = v->vm_fd = v->vcpu_fd = -1;
-	v->mem_start = (uint8_t*)MAP_FAILED;
-	v->run = (struct kvm_run*)MAP_FAILED;
-	v->run_mmap_size = 0;
-	v->mem_size = mem_size;
-    v->page_size = page_size;
+	memset(&v, 0, sizeof(v));
+	v.kvm_fd = v.vm_fd = v.vcpu_fd = -1;
+	v.mem_start = (uint8_t*)MAP_FAILED;
+	v.run = (struct kvm_run*)MAP_FAILED;
+	v.run_mmap_size = 0;
+	v.mem_size = mem_size;
+    v.page_size = page_size;
 
-	v->kvm_fd = open("/dev/kvm", O_RDWR);
-	if (v->kvm_fd < 0) return 0x10;
+	v.kvm_fd = open("/dev/kvm", O_RDWR);
+	if (v.kvm_fd < 0) return 0x10;
 
-    int api = ioctl(v->kvm_fd, KVM_GET_API_VERSION, 0);
+    int api = ioctl(v.kvm_fd, KVM_GET_API_VERSION, 0);
     if (api != KVM_API_VERSION) return 0x11;
 
-	v->vm_fd = ioctl(v->kvm_fd, KVM_CREATE_VM, 0);
-	if (v->vm_fd < 0) return 0x12;
+	v.vm_fd = ioctl(v.kvm_fd, KVM_CREATE_VM, 0);
+	if (v.vm_fd < 0) return 0x12;
 
-	v->mem_start = (uint8_t*)mmap(0, mem_size, PROT_READ | PROT_WRITE,
+	v.mem_start = (uint8_t*)mmap(0, mem_size, PROT_READ | PROT_WRITE,
 		   MAP_SHARED | MAP_ANONYMOUS, -1, 0);
-	if (v->mem_start == MAP_FAILED) return 0x13;
+	if (v.mem_start == MAP_FAILED) return 0x13;
 
     struct kvm_userspace_memory_region region = {
         .slot = 0,
         .flags = KVM_MEM_LOG_DIRTY_PAGES,
         .guest_phys_addr = 0,
-        .memory_size = v->mem_size, /* bytes */
-        .userspace_addr = (uintptr_t)v->mem_start,
+        .memory_size = v.mem_size, /* bytes */
+        .userspace_addr = (uintptr_t)v.mem_start,
     };
 
-    if (ioctl(v->vm_fd, KVM_SET_USER_MEMORY_REGION, &region) < 0) return 0x14;
+    if (ioctl(v.vm_fd, KVM_SET_USER_MEMORY_REGION, &region) < 0) return 0x14;
 
-	v->vcpu_fd = ioctl(v->vm_fd, KVM_CREATE_VCPU, 0);
-    if (v->vcpu_fd < 0) return 0x15;
+	v.vcpu_fd = ioctl(v.vm_fd, KVM_CREATE_VCPU, 0);
+    if (v.vcpu_fd < 0) return 0x15;
 
-	v->run_mmap_size = ioctl(v->kvm_fd, KVM_GET_VCPU_MMAP_SIZE, 0);
-    if (v->run_mmap_size <= 0) return 0x16;
+	v.run_mmap_size = ioctl(v.kvm_fd, KVM_GET_VCPU_MMAP_SIZE, 0);
+    if (v.run_mmap_size <= 0) return 0x16;
 
-	v->run = (struct kvm_run*)mmap(NULL, v->run_mmap_size, PROT_READ | PROT_WRITE,
-			     MAP_SHARED, v->vcpu_fd, 0);
-	if (v->run == MAP_FAILED) return 0x17;
+	v.run = (struct kvm_run*)mmap(NULL, v.run_mmap_size, PROT_READ | PROT_WRITE,
+			     MAP_SHARED, v.vcpu_fd, 0);
+	if (v.run == MAP_FAILED) return 0x17;
 
 	return 0;
 }
 
-void vm_destroy(struct vm* v) {
-    if (v->run && v->run != MAP_FAILED) {
-		munmap(v->run, (size_t)v->run_mmap_size);
-		v->run = (struct kvm_run*)MAP_FAILED;
+void vm_destroy(struct vm &v) {
+    if (v.run && v.run != MAP_FAILED) {
+		munmap(v.run, (size_t)v.run_mmap_size);
+		v.run = (struct kvm_run*)MAP_FAILED;
 	}
 
-	if(v->mem_start && v->mem_start != MAP_FAILED) {
-		munmap(v->mem_start, v->mem_size);
-		v->mem_start = (uint8_t*)MAP_FAILED;
+	if(v.mem_start && v.mem_start != MAP_FAILED) {
+		munmap(v.mem_start, v.mem_size);
+		v.mem_start = (uint8_t*)MAP_FAILED;
 	}
 
-	if (v->vcpu_fd >= 0) {
-		close(v->vcpu_fd);
-		v->vcpu_fd = -1;
+	if (v.vcpu_fd >= 0) {
+		close(v.vcpu_fd);
+		v.vcpu_fd = -1;
 	}
 
-	if (v->vm_fd >= 0) {
-		close(v->vm_fd);
-		v->vm_fd = -1;
+	if (v.vm_fd >= 0) {
+		close(v.vm_fd);
+		v.vm_fd = -1;
 	}
 
-	if (v->kvm_fd >= 0) {
-		close(v->kvm_fd);
-		v->kvm_fd = -1;
+	if (v.kvm_fd >= 0) {
+		close(v.kvm_fd);
+		v.kvm_fd = -1;
 	}
 }
 
@@ -298,41 +298,41 @@ static void setup_segments_64(struct kvm_sregs* sregs) {
 	sregs->ds = sregs->es = sregs->fs = sregs->gs = sregs->ss = data;
 }
 
-int setup_long_mode(struct vm* v, struct kvm_sregs* sregs) {
+int setup_long_mode(struct vm &v, struct kvm_sregs* sregs) {
 
-    if (ioctl(v->vcpu_fd, KVM_GET_SREGS, sregs) != 0)
+    if (ioctl(v.vcpu_fd, KVM_GET_SREGS, sregs) != 0)
 		return 0x20;
 
-    const static uint64_t MEM_END = v->mem_size;
+    const static uint64_t MEM_END = v.mem_size;
 
 	uint64_t pml4_addr = MEM_END - PML4_OFF;
-	uint64_t *pml4 = (uint64_t *)(v->mem_start + pml4_addr);
+	uint64_t *pml4 = (uint64_t *)(v.mem_start + pml4_addr);
 
 	uint64_t pdpt_addr = MEM_END - PDP_OFF;
-	uint64_t *pdpt = (uint64_t *)(v->mem_start + pdpt_addr);
+	uint64_t *pdpt = (uint64_t *)(v.mem_start + pdpt_addr);
 
 	uint64_t pd_addr = MEM_END - PD_OFF;
-	uint64_t *pd = (uint64_t *)(v->mem_start + pd_addr);
+	uint64_t *pd = (uint64_t *)(v.mem_start + pd_addr);
 
 	pml4[0] = PDE64_PRESENT | PDE64_RW | PDE64_USER | pdpt_addr;
 	pdpt[0] = PDE64_PRESENT | PDE64_RW | PDE64_USER | pd_addr;
 
-    if (v->page_size == 0x200000) {
+    if (v.page_size == 0x200000) {
         // page size is 2 MB
         // pd[0] = PDE64_PRESENT | PDE64_RW | PDE64_USER | PDE64_PS;
-        uint8_t n_pages = v->mem_size >> 21;
+        uint8_t n_pages = v.mem_size >> 21;
         for (size_t ix = 0; ix < n_pages; ++ix) {
             uint64_t page = (ix << 21);
             pd[ix] = page | PDE64_PRESENT | PDE64_RW | PDE64_USER | PDE64_PS;
         }
-    } else if (v->page_size == 0x1000) {
+    } else if (v.page_size == 0x1000) {
         // page size is 4 KB
-        uint8_t n_pde = v->mem_size >> 21;
+        uint8_t n_pde = v.mem_size >> 21;
         for (uint64_t ix = 0; ix < n_pde; ++ix) {
             const uint16_t n_pages = 512;
 
             uint64_t pt_addr = MEM_END - PT_OFF + (ix * 0x1000);
-            uint64_t *pt = (uint64_t *)(v->mem_start + pt_addr);
+            uint64_t *pt = (uint64_t *)(v.mem_start + pt_addr);
 
             pd[ix] = pt_addr | PDE64_PRESENT | PDE64_RW | PDE64_USER;
             for (uint64_t jx = 0; jx < n_pages; ++jx) {
@@ -350,7 +350,7 @@ int setup_long_mode(struct vm* v, struct kvm_sregs* sregs) {
 
     setup_segments_64(sregs);
 
-    if (ioctl(v->vcpu_fd, KVM_SET_SREGS, sregs) != 0) {
+    if (ioctl(v.vcpu_fd, KVM_SET_SREGS, sregs) != 0) {
         return 0x22;
     }
 
@@ -358,7 +358,7 @@ int setup_long_mode(struct vm* v, struct kvm_sregs* sregs) {
 	
 }
 
-int load_guest_image(struct vm* v, const char* path) {
+int load_guest_image(struct vm &v, const char* path) {
     FILE *f = fopen(path, "rb");
 	if (!f)
 		return 0x30;
@@ -375,12 +375,12 @@ int load_guest_image(struct vm* v, const char* path) {
 	}
 	rewind(f);
 
-	if((uint64_t)fsz > v->mem_size - GUEST_START_ADDR) {
+	if((uint64_t)fsz > v.mem_size - GUEST_START_ADDR) {
 		fclose(f);
 		return 0x33;
 	}
 
-	if (fread(v->mem_start + GUEST_START_ADDR, 1, (size_t)fsz, f) != (size_t)fsz) {
+	if (fread(v.mem_start + GUEST_START_ADDR, 1, (size_t)fsz, f) != (size_t)fsz) {
 		fclose(f);
 		return 0x34;
 	}
@@ -389,15 +389,15 @@ int load_guest_image(struct vm* v, const char* path) {
 	return 0;
 }
 
-int set_context(struct vm* v) {
+int set_context(struct vm &v) {
     struct kvm_regs regs;
     memset(&regs, 0, sizeof(regs));
 
     regs.rip = GUEST_START_ADDR; 
-	regs.rsp = v->mem_size - STACK_START_OFF; // SP raste nadole
+	regs.rsp = v.mem_size - STACK_START_OFF; // SP raste nadole
     regs.rflags = 0x2;
 
-	if (ioctl(v->vcpu_fd, KVM_SET_REGS, &regs) < 0) {
+	if (ioctl(v.vcpu_fd, KVM_SET_REGS, &regs) < 0) {
 		return 0x40;
 	}
     return 0;
@@ -569,10 +569,10 @@ static int fseek_routine(int vfd, long offset) {
     return ret;
 }
 
-static void system_call_routine(struct vm* v) {
+static void system_call_routine(struct vm &v) {
     
     struct kvm_regs regs;
-    if (ioctl(v->vcpu_fd, KVM_GET_REGS, &regs) < 0) {
+    if (ioctl(v.vcpu_fd, KVM_GET_REGS, &regs) < 0) {
         LOG("[HOST]", "Host couldn't get VM regs in syscall.", RED_PREFIX);
         return;
     }
@@ -585,8 +585,8 @@ static void system_call_routine(struct vm* v) {
     //printf("op_code: %ld\targ1r: %ld\targ2r: %ld\n", op_code, arg1r, arg2r);
     switch(op_code) {
         case SYS_FOPEN: // fopen
-            filename = (char*)(arg1r+v->mem_start);
-            mode = (char*)(arg2r+v->mem_start);
+            filename = (char*)(arg1r+v.mem_start);
+            mode = (char*)(arg2r+v.mem_start);
             regs.rax = (uint64_t)fopen_routine(filename, mode);
             break;
         case SYS_FCLOSE: // fclose
@@ -615,14 +615,14 @@ static void system_call_routine(struct vm* v) {
             break;
     }
 
-    if (ioctl(v->vcpu_fd, KVM_SET_REGS, &regs) < 0) {
+    if (ioctl(v.vcpu_fd, KVM_SET_REGS, &regs) < 0) {
         LOG("[HOST]", "Host couldn't set VM regs in syscall.", RED_PREFIX);
         return;
     }
 }
 
 
-int run(struct vm* v) {
+int run(struct vm &v) {
     char src[20];
     char vm_src[20];
     sprintf(src, "[GUEST-%d]", vm_id);
@@ -647,20 +647,20 @@ int run(struct vm* v) {
     };
     
 	while(stop == 0) {
-		int ret = ioctl(v->vcpu_fd, KVM_RUN, 0);
+		int ret = ioctl(v.vcpu_fd, KVM_RUN, 0);
 		if (ret != 0) {
             status = 0x50;
             break;
         }
 
-		switch (v->run->exit_reason) {
+		switch (v.run->exit_reason) {
 			case KVM_EXIT_IO:
                 msg_recv = 1;
-                if (v->run->io.direction == KVM_EXIT_IO_IN && 
-                        v->run->io.port == CIO_PORT) {
+                if (v.run->io.direction == KVM_EXIT_IO_IN && 
+                        v.run->io.port == CIO_PORT) {
                     flush();
-                    char *p = (char *)v->run;
-                    char *c = (p + v->run->io.data_offset);
+                    char *p = (char *)v.run;
+                    char *c = (p + v.run->io.data_offset);
                     if (bufi.size() == 0) {
                         sem_wait(mux);
                         printf("%s%s%s ", DARK_GREEN, vm_src, NORMAL_PREFIX);
@@ -670,17 +670,17 @@ int run(struct vm* v) {
                     }
                     *c = bufi[0];
                     bufi.replace(0, 1, "");
-                } else if (v->run->io.direction == KVM_EXIT_IO_OUT && 
-                        v->run->io.port == CIO_PORT) {
-					char *p = (char *)v->run;
-                    char  c = *(p + v->run->io.data_offset);
+                } else if (v.run->io.direction == KVM_EXIT_IO_OUT && 
+                        v.run->io.port == CIO_PORT) {
+					char *p = (char *)v.run;
+                    char  c = *(p + v.run->io.data_offset);
                     if (cur < N && c != '\n') 
                         buf[cur++] = c;
                     if (c == '\n' || cur == N) {
                         flush();
                     }
-                } else if (v->run->io.direction == KVM_EXIT_IO_OUT && 
-                        v->run->io.port == FIO_PORT) {
+                } else if (v.run->io.direction == KVM_EXIT_IO_OUT && 
+                        v.run->io.port == FIO_PORT) {
                     system_call_routine(v);
 				}
                 
@@ -688,7 +688,7 @@ int run(struct vm* v) {
 			case KVM_EXIT_HLT:
                 status = 0; stop = 1; break;
 			case KVM_EXIT_SHUTDOWN:
-                ioctl(v->vcpu_fd, KVM_GET_REGS, &regs);
+                ioctl(v.vcpu_fd, KVM_GET_REGS, &regs);
                 printf("RIP=0x%.16llx RSP=0x%.16llx RAX=0x%.16llx\n",
                     regs.rip, regs.rsp, regs.rax);
                 status = 0x51; stop = 1; break;
@@ -714,7 +714,7 @@ int child_main(args_t& myArgs) {
 
     // init vm
     struct vm v;
-    status = vm_init(&v, myArgs.memory_sz, myArgs.page_sz);
+    status = vm_init(v, myArgs.memory_sz, myArgs.page_sz);
     switch (status) {
         case 0x00: LOG(src, "VM inited successfully.", GREEN_PREFIX); break;
         case 0x10: LOG(src, "Couldn't open /dev/kvm.", RED_PREFIX); break;
@@ -733,7 +733,7 @@ int child_main(args_t& myArgs) {
     
     // setup long mode & paging
     struct kvm_sregs sregs;
-    status = setup_long_mode(&v, &sregs);
+    status = setup_long_mode(v, &sregs);
     switch (status) {
         case 0x00: LOG(src, "Long mode setup successfully.", GREEN_PREFIX); break;
         case 0x20: LOG(src, "KVM_GET_SREGS", RED_PREFIX) break;
@@ -745,7 +745,7 @@ int child_main(args_t& myArgs) {
     if (status != 0)
         goto cleanup;
 
-    status = load_guest_image(&v, myArgs.guest_path[vm_id].c_str());
+    status = load_guest_image(v, myArgs.guest_path[vm_id].c_str());
     switch (status) {
         case 0x00: LOG(src, "Guest Image loaded successfully.", GREEN_PREFIX); break;
         case 0x30: LOG(src, "Failed to open guest image.", RED_PREFIX); break;
@@ -759,7 +759,7 @@ int child_main(args_t& myArgs) {
     if (status != 0)
         goto cleanup;
     
-    status = set_context(&v);
+    status = set_context(v);
     switch (status) {
         case 0x00: LOG(src, "Regs set successfully.", GREEN_PREFIX); break;
         case 0x40: LOG(src, "KVM_SET_REGS", RED_PREFIX); break;
@@ -769,7 +769,7 @@ int child_main(args_t& myArgs) {
     if (status != 0)
         goto cleanup;
 
-    status = run(&v);
+    status = run(v);
     switch(status) {
         case 0x00: LOG(src, "Graceful exit - HLT reached.", GREEN_PREFIX); break;
         case 0x50: LOG(src, "KVM_RUN", RED_PREFIX); break;
@@ -780,7 +780,7 @@ int child_main(args_t& myArgs) {
     }
 
 cleanup:
-    vm_destroy(&v);
+    vm_destroy(v);
 
     return status;
 
