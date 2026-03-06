@@ -14,7 +14,7 @@ static void inb(uint16_t port, uint8_t* value) {
 }
 
 void putc(int c) {
-	outb(CIO_PORT, c);
+    outb(CIO_PORT, c);
 }
 
 char getc() {
@@ -68,4 +68,8 @@ long ftell(int fd) {
 
 int fseek(int fd, long offset) {
 	return syscall(SYS_FSEEK, (long)fd, offset);
+}
+
+int get_cpuid() {
+    return syscall(SYS_CPUID, 0, 0);
 }

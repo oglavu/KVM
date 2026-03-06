@@ -220,6 +220,9 @@ static void system_call_routine(struct vm &v, int cpu_id) {
             vfd = (int)arg1r;
             regs.rax = (uint64_t)fseek_routine(vfd, arg2r);
             break;
+        case SYS_CPUID:
+            regs.rax = (uint64_t)cpu_id;
+            break;
         default: 
             LOG("[VM]", "Unknown syscall.", RED_PREFIX);
             break;

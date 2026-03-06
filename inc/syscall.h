@@ -8,10 +8,14 @@
 #define SYS_FTELL 4
 #define SYS_FSEEK 5
 
+#define SYS_CPUID 6
+
 #ifdef GUEST_BUILD
 
 #define EOF (int)-1
 
+// util
+int get_cpuid();
 
 // std::io system calls
 void putc(int c);
