@@ -15,4 +15,6 @@ struct args_t {
     std::vector<std::string> files;
 };
 
+void print_help();
+
 int read_args(int argc, char *argv[], args_t &myArgs);

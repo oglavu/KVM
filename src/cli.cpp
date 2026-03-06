@@ -12,6 +12,7 @@
 // (2) invalid format (bad --vm string, unknown key, missing '=')
 // (3) trying to set the arg twice (duplicate key within one --vm, or --file twice)
 // (4) invalid arg value (bad mem/page/cpus, missing file, not executable, etc.)
+// (5) help requested (not an error, but a special case)
 
 static bool is_option(const char* s) {
     return s && s[0] == '-';
@@ -114,14 +115,29 @@ static int collect_files(int argc, char* argv[], int& idx, std::vector<std::stri
     return 0;
 }
 
+void print_help() {
+    printf("Usage: mini_hypervisor.a [OPTIONS]\n");
+    printf("Options:\n");
+    printf("  --vm=KEY=VAL,...     Define a VM configuration (can be specified multiple times)\n");
+    printf("                       Required keys: image, cpus, mem, page\n");
+    printf("                           image: specifies the path to guest image binary. Valid entries: any path to executable file\n");
+    printf("                           cpus: specifies the number of vCPUs to run the given image: Valid entries: dependant on host CPU\n");
+    printf("                           mem: specifies the total size of quest memory. Valid entries: 2, 4, 8 [MiB]\n");
+    printf("                           page: specifies the page size. Valid entries: 4 [KiB], 2 [MiB]\n");
+    printf("                       Example: --vm=image=vm1.bin,cpus=2,mem=4,page=2\n");
+    printf("  -f, --file FILE...   Specify files to be used by the VMs (can only be specified once)\n");
+    printf("                       Example: -f file1 file2\n");
+    printf("  --help               Show this help message and exit\n");
+}
+
 int read_args(int argc, char* argv[], args_t &myArgs) {
-    if (argc < 3) return 1;
 
     bool file_set = false;
 
     static option longopts[] = {
         {"vm",      required_argument,  nullptr, 'v'},
         {"file",    no_argument,        nullptr, 'f'}, // parsed manually
+        {"help",    no_argument,        nullptr, 'h'},
         {nullptr,   0,                  nullptr, 0}
     };
 
@@ -151,6 +167,11 @@ int read_args(int argc, char* argv[], args_t &myArgs) {
             if (e != 0) return e;
             optind = idx;
             continue;
+        }
+
+        if (c == 'h') { // --help
+            print_help();
+            return 5;
         }
 
         return 2;

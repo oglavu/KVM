@@ -106,10 +106,11 @@ int main(int argc, char* argv[]) {
     int status = read_args(argc, argv, myArgs);
     switch (status) {
         case 0: LOG("[HOST]", "Args read successfully.", GREEN_PREFIX); break;
-        case 1: LOG("[HOST]", "Invalid arg format. Try:\nexe (--memory|-m) <m> (--page|-p) <p> (--guest|-g) <g> [--file|-f <f>]\nwhere <m> is either 2, 4 or 8 and <p> either 2 or 4, and <g> an executable file", RED_PREFIX); break;
-        case 2: LOG("[HOST]", "Invalid number of args. Try:\nexe (--memory|-m) <m> (--page|-p) <p> (--guest|-g) <g> [--file|-f <f>]\nwhere <m> is either 2, 4 or 8 and <p> either 2 or 4, and <g> an executable file", RED_PREFIX); break;
+        case 1: LOG("[HOST]", "Invalid arg format.", RED_PREFIX); print_help(); break;
+        case 2: LOG("[HOST]", "Invalid number of args.", RED_PREFIX); print_help(); break;
         case 3: LOG("[HOST]", "Arg set twice", RED_PREFIX); break;
         case 4: LOG("[HOST]", "Invalid arg value.", RED_PREFIX); break;
+        case 5: break;
         default:LOG("[HOST]", "Unexpected read args status.", RED_PREFIX); break;
     };
 
