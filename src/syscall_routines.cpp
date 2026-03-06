@@ -52,17 +52,15 @@ int filesys_setup(
         std::filesystem::create_directories(proc_dir);
     }
 
-    // create/copy files
-    for (size_t i=0; i<file_paths.size(); ++i) {
-        std::string vfilepath(shared_prtt);
-        std::string rfilepath(file_paths[i]);
-        vfilepath.append(rfilepath);
-
-        if (0 == access(rfilepath.c_str(), R_OK)) {
-            std::filesystem::copy(rfilepath, vfilepath, std::filesystem::copy_options::recursive);
+    for (size_t i = 0; i < file_paths.size(); ++i) {
+        std::filesystem::path src(file_paths[i]);
+        std::filesystem::path dst = std::filesystem::path(shared_prtt) / src.filename();
+    
+        if (access(src.c_str(), R_OK) == 0) {
+            std::filesystem::copy_file(src, dst, std::filesystem::copy_options::overwrite_existing);
         } else {
-            FILE* fd = fopen(vfilepath.c_str(), "w+");
-            fclose(fd);
+            FILE* fd = fopen(dst.c_str(), "w+");
+            if (fd) fclose(fd);
         }
     }
 

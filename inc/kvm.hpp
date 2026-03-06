@@ -11,7 +11,7 @@
 #define PD_OFF   0x3000
 #define PT_OFF   0x7000
 #define GUEST_START_ADDR    0x0000
-#define STACK_START_OFF     0x7000
+#define STACK_START_OFF     0x10000
 #define STACK_SIZE          0x1000
 
 // PDE bitovi
