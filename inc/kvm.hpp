@@ -12,6 +12,7 @@
 #define PT_OFF   0x7000
 #define GUEST_START_ADDR    0x0000
 #define STACK_START_OFF     0x7000
+#define STACK_SIZE          0x1000
 
 // PDE bitovi
 #define PDE64_PRESENT (1ULL << 0)
@@ -31,17 +32,18 @@
 struct vm {
     int kvm_fd,
         vm_fd,
-        vcpu_fd;
-    uint8_t* mem_start;
+        vcpu_fd[KVM_CAP_MAX_VCPUS];
+    uint8_t ncpus;
+    uint8_t *mem_start;
     size_t mem_size;
     size_t page_size;
-    struct kvm_run *run;
+    struct kvm_run *run[KVM_CAP_MAX_VCPUS];
     int run_mmap_size;
-    struct kvm_sregs sregs;
+    struct kvm_sregs sregs[KVM_CAP_MAX_VCPUS];
 };
 
 
-int vm_init(struct vm &v, size_t mem_size, size_t page_size);
+int vm_init(struct vm &v, uint8_t ncpus, size_t mem_size, size_t page_size);
 
 void vm_destroy(struct vm &v);
 

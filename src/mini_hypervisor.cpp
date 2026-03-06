@@ -7,16 +7,18 @@
 #include "kvm.hpp"
 #include "syscall.h"
 #include "log.hpp"
+#include <thread>
 
 
 int child_main(args_t& myArgs) {
     int status;
     char src[20];
     sprintf(src, "[VM-%d]", vm_id);
+    std::vector<std::thread> threads;
 
     // init vm
     vm v;
-    status = vm_init(v, myArgs.memory_sz, myArgs.page_sz);
+    status = vm_init(v, myArgs.vms[vm_id].cpus, myArgs.vms[vm_id].memory_sz, myArgs.vms[vm_id].page_sz);
     switch (status) {
         case 0x00: LOG(src, "VM inited successfully.", GREEN_PREFIX); break;
         case 0x10: LOG(src, "Couldn't open /dev/kvm.", RED_PREFIX); break;
@@ -46,7 +48,7 @@ int child_main(args_t& myArgs) {
     if (status != 0)
         goto cleanup;
 
-    status = load_guest_image(v, myArgs.guest_path[vm_id].c_str());
+    status = load_guest_image(v, myArgs.vms[vm_id].image.c_str());
     switch (status) {
         case 0x00: LOG(src, "Guest Image loaded successfully.", GREEN_PREFIX); break;
         case 0x30: LOG(src, "Failed to open guest image.", RED_PREFIX); break;
@@ -70,15 +72,23 @@ int child_main(args_t& myArgs) {
     if (status != 0)
         goto cleanup;
 
-    status = run(v);
-    switch(status) {
-        case 0x00: LOG(src, "Graceful exit - HLT reached.", GREEN_PREFIX); break;
-        case 0x50: LOG(src, "KVM_RUN", RED_PREFIX); break;
-        case 0x51: LOG(src, "Hard exit - forcefull shutdown.", RED_PREFIX); break;
-        case 0x52: LOG(src, "Unexpected exit cause.", RED_PREFIX); break;
-        case 0x53: LOG(src, "Received no message.", RED_PREFIX); break;
-        default:   LOG(src, "Unexpected error.", RED_PREFIX); break;
+
+    for (int i = 0; i < v.ncpus; ++i) {
+        threads.emplace_back([&, i] { 
+            status = run_vcpu(v, i); 
+            
+            switch(status) {
+            case 0x00: LOG(src, "Graceful exit - HLT reached.", GREEN_PREFIX); break;
+            case 0x50: LOG(src, "KVM_RUN", RED_PREFIX); break;
+            case 0x51: LOG(src, "Hard exit - forcefull shutdown.", RED_PREFIX); break;
+            case 0x52: LOG(src, "Unexpected exit cause.", RED_PREFIX); break;
+            case 0x53: LOG(src, "Received no message.", RED_PREFIX); break;
+            default:   LOG(src, "Unexpected error.", RED_PREFIX); break;
+            }
+        });
     }
+
+    for (auto& t : threads) t.join();
 
 cleanup:
     vm_destroy(v);
@@ -105,7 +115,9 @@ int main(int argc, char* argv[]) {
     if (status != 0) 
         return status;
 
-    status = filesys_setup(myArgs.guest_path, myArgs.file_path);
+    std::vector<std::string> images;
+    for (const auto& vm : myArgs.vms) images.push_back(vm.image);
+    status = filesys_setup(images, myArgs.files);
     switch(status) {
         case 0: LOG("[HOST]", "Disk partitioned successfully.", GREEN_PREFIX); break;
         default:LOG("[HOST]", "Disk partitioned failed", RED_PREFIX) break;
@@ -114,7 +126,7 @@ int main(int argc, char* argv[]) {
     if (status != 0)
         return status;
 
-    for (uint8_t p_ix = 0; p_ix < myArgs.guest_path.size(); ++p_ix) {
+    for (uint8_t p_ix = 0; p_ix < myArgs.vms.size(); ++p_ix) {
         pid_t pid = fork();
 
         if (pid < 0) {
@@ -136,7 +148,7 @@ int main(int argc, char* argv[]) {
     }
 
     int p_status;
-    for (size_t ix = 0; ix < myArgs.guest_path.size(); ++ix) {
+    for (size_t ix = 0; ix < myArgs.vms.size(); ++ix) {
         pid_t pid = wait(&p_status);
         
         sprintf(src, "VM-%d returned with status: %d", pid, p_status);

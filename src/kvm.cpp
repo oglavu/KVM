@@ -10,13 +10,14 @@
 #include <filesystem>
 
 
-int vm_init(struct vm &v, size_t mem_size, size_t page_size) {
+int vm_init(struct vm &v, uint8_t ncpus, size_t mem_size, size_t page_size) {
 
-	memset(&v, 0, sizeof(v));
-	v.kvm_fd = v.vm_fd = v.vcpu_fd = -1;
+	memset(&v.vcpu_fd, 0, KVM_CAP_MAX_VCPUS * sizeof(int));
+	memset(&v.run, 0, KVM_CAP_MAX_VCPUS * sizeof(struct kvm_run*));
+	v.kvm_fd = v.vm_fd = -1;
 	v.mem_start = (uint8_t*)MAP_FAILED;
-	v.run = (struct kvm_run*)MAP_FAILED;
 	v.run_mmap_size = 0;
+	v.ncpus = ncpus;
 	v.mem_size = mem_size;
     v.page_size = page_size;
 
@@ -43,33 +44,37 @@ int vm_init(struct vm &v, size_t mem_size, size_t page_size) {
 
     if (ioctl(v.vm_fd, KVM_SET_USER_MEMORY_REGION, &region) < 0) return 0x14;
 
-	v.vcpu_fd = ioctl(v.vm_fd, KVM_CREATE_VCPU, 0);
-    if (v.vcpu_fd < 0) return 0x15;
-
 	v.run_mmap_size = ioctl(v.kvm_fd, KVM_GET_VCPU_MMAP_SIZE, 0);
     if (v.run_mmap_size <= 0) return 0x16;
 
-	v.run = (struct kvm_run*)mmap(NULL, v.run_mmap_size, PROT_READ | PROT_WRITE,
-			     MAP_SHARED, v.vcpu_fd, 0);
-	if (v.run == MAP_FAILED) return 0x17;
+
+	for (int i = 0; i < v.ncpus; ++i) {
+		v.vcpu_fd[i] = ioctl(v.vm_fd, KVM_CREATE_VCPU, i);
+		if (v.vcpu_fd[i] < 0) return 0x15;
+	
+		v.run[i] = (struct kvm_run*)mmap(NULL, v.run_mmap_size, PROT_READ | PROT_WRITE,
+					 MAP_SHARED, v.vcpu_fd[i], 0);
+		if (v.run[i] == MAP_FAILED) return 0x17;
+	}
 
 	return 0;
 }
 
 void vm_destroy(struct vm &v) {
-    if (v.run && v.run != MAP_FAILED) {
-		munmap(v.run, (size_t)v.run_mmap_size);
-		v.run = (struct kvm_run*)MAP_FAILED;
-	}
-
 	if(v.mem_start && v.mem_start != MAP_FAILED) {
 		munmap(v.mem_start, v.mem_size);
 		v.mem_start = (uint8_t*)MAP_FAILED;
 	}
 
-	if (v.vcpu_fd >= 0) {
-		close(v.vcpu_fd);
-		v.vcpu_fd = -1;
+	for (int i = 0; i < v.ncpus; ++i) {
+		if (v.run[i] && v.run[i] != MAP_FAILED) {
+			munmap(v.run[i], (size_t)v.run_mmap_size);
+			v.run[i] = (struct kvm_run*)MAP_FAILED;
+		}
+		if (v.vcpu_fd[i] >= 0) {
+			close(v.vcpu_fd[i]);
+			v.vcpu_fd[i] = -1;
+		}
 	}
 }
 
@@ -100,9 +105,6 @@ static void setup_segments_64(struct kvm_sregs &sregs) {
 }
 
 int setup_long_mode(struct vm &v) {
-
-    if (ioctl(v.vcpu_fd, KVM_GET_SREGS, &v.sregs) != 0)
-		return 0x20;
 
     const static uint64_t MEM_END = v.mem_size;
 
@@ -144,16 +146,21 @@ int setup_long_mode(struct vm &v) {
         }
     } else return 0x21;
 
-    v.sregs.cr3  = pml4_addr; 
-	v.sregs.cr4  = CR4_PAE; // "Physical Address Extension" mora biti 1 za long mode.
-	v.sregs.cr0  = CR0_PE | CR0_PG; // Postavljanje "Protected Mode" i "Paging" 
-	v.sregs.efer = EFER_LME | EFER_LMA; // Postavljanje  "Long Mode Active" i "Long Mode Enable"
+	for (int i = 0; i < v.ncpus; ++i) {
+		if (ioctl(v.vcpu_fd[i], KVM_GET_SREGS, &v.sregs[i]) != 0)
+			return 0x20;
 
-    setup_segments_64(v.sregs);
+		v.sregs[i].cr3  = pml4_addr; 
+		v.sregs[i].cr4  = CR4_PAE; // "Physical Address Extension" mora biti 1 za long mode.
+		v.sregs[i].cr0  = CR0_PE | CR0_PG; // Postavljanje "Protected Mode" i "Paging" 
+		v.sregs[i].efer = EFER_LME | EFER_LMA; // Postavljanje  "Long Mode Active" i "Long Mode Enable"
 
-    if (ioctl(v.vcpu_fd, KVM_SET_SREGS, &v.sregs) != 0) {
-        return 0x22;
-    }
+		setup_segments_64(v.sregs[i]);
+
+		if (ioctl(v.vcpu_fd[i], KVM_SET_SREGS, &v.sregs[i]) != 0) {
+			return 0x22;
+		}
+	}
 
     return 0;
 	
@@ -195,11 +202,13 @@ int set_context(struct vm &v) {
     memset(&regs, 0, sizeof(regs));
 
     regs.rip = GUEST_START_ADDR; 
-	regs.rsp = v.mem_size - STACK_START_OFF; // SP raste nadole
-    regs.rflags = 0x2;
+	regs.rflags = 0x2;
 
-	if (ioctl(v.vcpu_fd, KVM_SET_REGS, &regs) < 0) {
-		return 0x40;
+	for (int i = 0; i < v.ncpus; ++i) {
+		regs.rsp = v.mem_size - STACK_START_OFF - i * STACK_SIZE; // SP raste nadole
+		if (ioctl(v.vcpu_fd[i], KVM_SET_REGS, &regs) < 0)
+			return 0x40;
 	}
+
     return 0;
 }

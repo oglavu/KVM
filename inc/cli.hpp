@@ -2,12 +2,17 @@
 
 #include <vector>
 #include <string>
-#include <unistd.h>
 
-typedef struct {
-    size_t memory_sz, page_sz;
-    std::vector<std::string> guest_path;
-    std::vector<std::string> file_path;
-} args_t;
+struct vm_args_t {
+    std::string image;
+    int cpus;
+    size_t memory_sz;
+    size_t page_sz;
+};
+
+struct args_t {
+    std::vector<vm_args_t> vms;
+    std::vector<std::string> files;
+};
 
 int read_args(int argc, char *argv[], args_t &myArgs);

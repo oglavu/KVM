@@ -23,11 +23,9 @@ const std::string proc_prtt = "drive/proc%d/";
 
 extern int vm_id;
 
-void system_call_routine(struct vm &v);
-
 int filesys_setup(
     std::vector<std::string>& guest_paths, 
     std::vector<std::string>& file_paths
 );
 
-int run(struct vm &v);
+int run_vcpu(struct vm &v, int cpu_id);

@@ -179,10 +179,10 @@ static int fseek_routine(int vfd, long offset) {
     return ret;
 }
 
-void system_call_routine(struct vm &v) {
+static void system_call_routine(struct vm &v, int cpu_id) {
     
     struct kvm_regs regs;
-    if (ioctl(v.vcpu_fd, KVM_GET_REGS, &regs) < 0) {
+    if (ioctl(v.vcpu_fd[cpu_id], KVM_GET_REGS, &regs) < 0) {
         LOG("[HOST]", "Host couldn't get VM regs in syscall.", RED_PREFIX);
         return;
     }
@@ -225,18 +225,18 @@ void system_call_routine(struct vm &v) {
             break;
     }
 
-    if (ioctl(v.vcpu_fd, KVM_SET_REGS, &regs) < 0) {
+    if (ioctl(v.vcpu_fd[cpu_id], KVM_SET_REGS, &regs) < 0) {
         LOG("[HOST]", "Host couldn't set VM regs in syscall.", RED_PREFIX);
         return;
     }
 }
 
 
-int run(struct vm &v) {
+int run_vcpu(struct vm &v, int cpu_id) {
     char src[20];
     char vm_src[20];
-    sprintf(src, "[GUEST-%d]", vm_id);
-    sprintf(vm_src, "[VM-%d]", vm_id);
+    sprintf(src, "[GUEST-%d:CPU-%d]", vm_id, cpu_id);
+    sprintf(vm_src, "[VM-%d:CPU-%d]", vm_id, cpu_id);
     struct kvm_regs regs;
     int stop = 0;
     int msg_recv = 0;
@@ -257,21 +257,23 @@ int run(struct vm &v) {
     };
     
 	while(stop == 0) {
-		int ret = ioctl(v.vcpu_fd, KVM_RUN, 0);
+		int ret = ioctl(v.vcpu_fd[cpu_id], KVM_RUN, 0);
 		if (ret != 0) {
             status = 0x50;
             perror("KVM_RUN failed");
             break;
         }
 
-		switch (v.run->exit_reason) {
+        struct kvm_run *run = v.run[cpu_id];
+
+		switch (run->exit_reason) {
 			case KVM_EXIT_IO:
                 msg_recv = 1;
-                if (v.run->io.direction == KVM_EXIT_IO_IN && 
-                        v.run->io.port == CIO_PORT) {
+                if (run->io.direction == KVM_EXIT_IO_IN && 
+                        run->io.port == CIO_PORT) {
                     flush();
-                    char *p = (char *)v.run;
-                    char *c = (p + v.run->io.data_offset);
+                    char *p = (char *)run;
+                    char *c = (p + run->io.data_offset);
                     if (bufi.size() == 0) {
                         sem_wait(mux);
                         printf("%s%s%s ", DARK_GREEN, vm_src, NORMAL_PREFIX);
@@ -281,29 +283,33 @@ int run(struct vm &v) {
                     }
                     *c = bufi[0];
                     bufi.replace(0, 1, "");
-                } else if (v.run->io.direction == KVM_EXIT_IO_OUT && 
-                        v.run->io.port == CIO_PORT) {
-					char *p = (char *)v.run;
-                    char  c = *(p + v.run->io.data_offset);
+                } else if (run->io.direction == KVM_EXIT_IO_OUT && 
+                        run->io.port == CIO_PORT) {
+					char *p = (char *)run;
+                    char  c = *(p + run->io.data_offset);
                     if (cur < N && c != '\n') 
                         buf[cur++] = c;
                     if (c == '\n' || cur == N) {
                         flush();
                     }
-                } else if (v.run->io.direction == KVM_EXIT_IO_OUT && 
-                        v.run->io.port == FIO_PORT) {
-                    system_call_routine(v);
+                } else if (run->io.direction == KVM_EXIT_IO_OUT && 
+                        run->io.port == FIO_PORT) {
+                    system_call_routine(v, cpu_id);
 				}
                 
 				continue;
 			case KVM_EXIT_HLT:
                 status = 0; stop = 1; break;
 			case KVM_EXIT_SHUTDOWN:
-                ioctl(v.vcpu_fd, KVM_GET_REGS, &regs);
+                ioctl(v.vcpu_fd[cpu_id], KVM_GET_REGS, &regs);
                 printf("RIP=0x%.16llx RSP=0x%.16llx RAX=0x%.16llx\n",
                     regs.rip, regs.rsp, regs.rax);
                 status = 0x51; stop = 1; break;
 			default:
+                sem_wait(mux);
+                fprintf(stderr, "%s Unexpected exit: cpu=%d reason=%u\n",
+                        vm_src, cpu_id, run->exit_reason);
+                sem_post(mux);
                 status = 0x52; stop = 1; break;
     	}
   	}
