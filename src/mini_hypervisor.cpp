@@ -74,6 +74,7 @@ int child_main(args_t& myArgs) {
 
 
     for (int i = 0; i < v.ncpus; ++i) {
+        sprintf(src, "[VM-%d:CPU-%d]", vm_id, i);
         threads.emplace_back([&, i] { 
             status = run_vcpu(v, i); 
             
